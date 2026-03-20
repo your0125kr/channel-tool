@@ -419,22 +419,32 @@ async function fetchCandles(){
   }
 }
 
-// Binance API 엔드포인트 (막히면 순서대로 시도)
+// Binance API 엔드포인트 — 모바일은 CORS 프록시 경유
 const BINANCE_HOSTS = [
   'https://api.binance.com',
   'https://api1.binance.com',
   'https://api2.binance.com',
   'https://api3.binance.com',
 ];
+const CORS_PROXY = 'https://corsproxy.io/?';
 
 async function fetchWithFallback(path){
+  // 모바일은 CORS 프록시 먼저 시도
+  if(IS_MOBILE){
+    try{
+      const url = CORS_PROXY + encodeURIComponent('https://api.binance.com' + path);
+      const r = await fetch(url, {signal: AbortSignal.timeout(8000)});
+      if(r.ok) return r;
+    }catch(e){ console.warn('CORS 프록시 실패, 직접 시도...'); }
+  }
+  // PC 또는 프록시 실패 시 직접 시도
   for(const host of BINANCE_HOSTS){
     try{
       const r = await fetch(host + path, {signal: AbortSignal.timeout(5000)});
       if(r.ok) return r;
-    }catch(e){ console.warn(`${host} 실패, 다음 시도...`); }
+    }catch(e){ console.warn(`${host} 실패`); }
   }
-  throw new Error('모든 Binance 엔드포인트 실패');
+  throw new Error('모든 엔드포인트 실패');
 }
 const IS_MOBILE = window.matchMedia('(pointer:coarse)').matches
                || /iphone|ipad|ipod|android/i.test(navigator.userAgent);
