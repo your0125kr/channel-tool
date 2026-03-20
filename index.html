@@ -348,7 +348,7 @@ const S = {
   vpData:[],
   vpZoneState:null,
   vpAlerted:{},
-  lastDivKey:{},
+  lastDivKey:{},   // { '15m': { key:true, ... }, '1h': {...} } TF별 분리
   viewOff:0, viewZoom:1,
   yOffset:0, yZoom:1,        // Y축 이동/줌
   drag:false, dragX:0, dragOff:0,
@@ -553,14 +553,98 @@ function connectWS(){
 function stopDataFeed(){
   if(_pollTimer){ clearInterval(_pollTimer); _pollTimer=null; }
   if(S.ws){ S.ws.close(); S.ws=null; }
+  // 백그라운드 TF 폴링도 정지
+  stopBgPolling();
 }
 
 function loadSym(){
-  stopDataFeed(); // 기존 WS / 폴링 정지
-  S.lastDivKey={}; S.vpAlerted={}; S.vpZoneState=null;
+  stopDataFeed();
+  // lastDivKey TF별 분리 — 전환해도 이전 TF 기록 유지
+  if(!S.lastDivKey) S.lastDivKey={};
+  if(!S.lastDivKey[S.tf]) S.lastDivKey[S.tf]={};
+  S.vpAlerted={}; S.vpZoneState=null;
   S.yOffset=0; S.yZoom=1;
   getChans().forEach(ch=>{ch.zoneState=null;});
-  fetchCandles().then(()=>connectWS());
+  fetchCandles().then(()=>{
+    connectWS();
+    startBgPolling();
+  });
+}
+
+// ── 멀티 TF 백그라운드 폴링 ──────────────────────────
+let _bgPollTimers = {}; // { 'BTCUSDT_15m': timer, ... }
+
+function stopBgPolling(){
+  Object.values(_bgPollTimers).forEach(t=>clearInterval(t));
+  _bgPollTimers={};
+}
+
+function startBgPolling(){
+  stopBgPolling();
+  // 채널이 있는 TF 중 현재 TF 제외하고 폴링
+  const tfs = ['15m','30m','1h','1d','1w'];
+  tfs.forEach(tf=>{
+    const key=`${S.sym}_${tf}`;
+    if(tf===S.tf) return; // 현재 TF는 메인 WS/폴링이 담당
+    const chans = S.channelsByTF[key];
+    if(!chans||!chans.length) return; // 채널 없으면 스킵
+    // 이 TF용 폴링 시작
+    _bgPollTimers[key] = setInterval(()=>bgPollTF(tf, key, chans), 5000);
+  });
+}
+
+async function bgPollTF(tf, key, chans){
+  try{
+    const interval = BYBIT_TF[tf] || '15';
+    const url = `${BYBIT_BASE}/v5/market/kline?category=linear&symbol=${S.sym}&interval=${interval}&limit=2`;
+    const r = await fetch(url);
+    if(!r.ok) return;
+    const json = await r.json();
+    if(json.retCode!==0) return;
+    const list = json.result?.list;
+    if(!list||!list.length) return;
+    const c = parseBybitCandle(list[0]);
+    const price = c.c;
+    // 각 채널에 대해 알림 체크
+    chans.filter(ch=>ch.visible).forEach(ch=>{
+      checkChAlertsForTF(ch, price, tf);
+    });
+  }catch(e){}
+}
+
+// TF 지정 채널 알림 체크 (메인 candles 배열 불필요)
+function checkChAlertsForTF(ch, price, tf){
+  // chAt 계산을 위해 임시로 현재 캔들 수를 활용
+  // (백그라운드 TF는 캔들 없으니 타임스탬프 기반 근사값 사용)
+  const prox=S.cfg.proximity/100;
+  // 채널 레벨 계산 (현재 시점 인덱스 = S.candles.length-1 근사)
+  const approxIdx = S.candles.length-1;
+  const lvs={};
+  LVS.forEach(lv=>{ lvs[String(lv)]=chAt(ch,approxIdx,lv); });
+
+  let zone=null, bd=Infinity;
+  Object.entries(lvs).forEach(([k,lp])=>{
+    const d=Math.abs(price-lp)/lp;
+    if(d<=prox&&d<bd){bd=d;zone=k;}
+  });
+  if(lvs['2']&&price>lvs['2']*(1+prox)) zone='BREAK_HIGH';
+  if(lvs['-1']&&price<lvs['-1']*(1-prox)) zone='BREAK_LOW';
+  if(zone===ch.zoneState) return;
+  const prev=ch.zoneState; ch.zoneState=zone;
+  if(!zone) return;
+  // tf 정보를 포함해서 알림
+  const origTf=S.tf;
+  S.tf=tf; // 임시로 TF 바꿔서 알림 텍스트에 반영
+  if(zone==='BREAK_HIGH'||zone==='BREAK_LOW') fireBreak(ch,zone,price);
+  else{
+    ch.touchCounts[zone]=(ch.touchCounts[zone]||0)+1;
+    const lvPrice=lvs[zone];
+    let isFromAbove;
+    if(prev===null||prev===undefined){ isFromAbove=price<=lvPrice; }
+    else{ const pv=parseFloat(prev),cv=parseFloat(zone); isFromAbove=!isNaN(pv)?pv>cv:price<=lvPrice; }
+    fireChTouch(ch,zone,price,lvPrice,ch.touchCounts[zone],isFromAbove);
+  }
+  S.tf=origTf; // TF 복원
 }
 
 // ═══════════════════════════════════════════════════════
@@ -644,27 +728,29 @@ function findDivs(silent=false){
   if(n<30) return;
   const{H,L}=getPivots(rsi, Math.max(2,Math.floor(gap/2)));
 
-  // ── Regular Bullish: price LL + RSI HL, both pivots in OS zone ──
+  // ── Regular Bullish: price LL + RSI HL — 두 피벗 모두 완전히 OS 이하 ──
   for(let b=1;b<L.length;b++){
     const i2=L[b], i1=L[b-1];
     if(i2-i1<gap) continue;
-    if(n-i2<=CONFIRM) continue; // wait for confirmation
+    if(n-i2<=CONFIRM) continue;
     const r1=rsi[i1], r2=rsi[i2];
     if(!r1||!r2) continue;
-    if(r1>OS+5&&r2>OS+5) continue; // both must be near OS zone
+    // 두 피벗 모두 완전히 OS(30) 이하여야 함 — 엄격 필터
+    if(r1>OS||r2>OS) continue;
     const p1=C[i1].l, p2=C[i2].l;
     if(p2>=p1) continue; if(r2<=r1) continue;
     if((p1-p2)/p1<MIN_P) continue; if(r2-r1<MIN_R) continue;
     S.divs.push({type:'bull',i1,i2,p1,p2,r1,r2});
   }
-  // ── Regular Bearish: price HH + RSI LH, both in OB zone ──
+  // ── Regular Bearish: price HH + RSI LH — 두 피벗 모두 완전히 OB 이상 ──
   for(let b=1;b<H.length;b++){
     const i2=H[b], i1=H[b-1];
     if(i2-i1<gap) continue;
     if(n-i2<=CONFIRM) continue;
     const r1=rsi[i1], r2=rsi[i2];
     if(!r1||!r2) continue;
-    if(r1<OB-5&&r2<OB-5) continue;
+    // 두 피벗 모두 완전히 OB(70) 이상이어야 함 — 엄격 필터
+    if(r1<OB||r2<OB) continue;
     const p1=C[i1].h, p2=C[i2].h;
     if(p2<=p1) continue; if(r2>=r1) continue;
     if((p2-p1)/p1<MIN_P) continue; if(r1-r2<MIN_R) continue;
@@ -700,11 +786,15 @@ function findDivs(silent=false){
 }
 
 function checkDivAlerts(silent=false){
+  // TF별로 분리된 lastDivKey 사용
+  if(!S.lastDivKey[S.tf]) S.lastDivKey[S.tf]={};
+  const tfKeys = S.lastDivKey[S.tf];
+
   [...S.divs,...S.hdivs].forEach(d=>{
     const key=`${d.type}_${d.i1}_${d.i2}`;
-    if(S.lastDivKey[key]) return;
-    S.lastDivKey[key]=true;
-    // 초기 로딩 시(silent=true)엔 등록만 하고 알림 없음
+    if(tfKeys[key]) return;
+    tfKeys[key]=true;
+    // 초기 로딩/TF 전환 시(silent=true)엔 등록만 하고 알림 없음
     if(silent) return;
     const isH=d.type.startsWith('h');
     const isBull=d.type.includes('bull');
@@ -848,11 +938,29 @@ function drawVP(mn,mx){
 }
 
 // ── Channel ───────────────────────────────────────────
+// 타임스탬프로 실제 캔들 인덱스 찾기 (없으면 가장 가까운 것)
+function tsToIdx(ts){
+  if(!ts) return 0;
+  // 이진탐색으로 빠르게 찾기
+  let lo=0, hi=S.candles.length-1;
+  while(lo<hi){
+    const mid=Math.floor((lo+hi)/2);
+    if(S.candles[mid].t<ts) lo=mid+1; else hi=mid;
+  }
+  return lo;
+}
+
+// 채널 점의 현재 인덱스 반환 (ts 있으면 동적으로, 없으면 저장된 idx)
+function ptIdx(pt){
+  return pt.ts ? tsToIdx(pt.ts) : (pt.idx||0);
+}
+
 function chAt(ch,idx,lv){
   const{p1,p2,p3}=ch;
-  const slope=p1.idx===p2.idx?0:(p2.price-p1.price)/(p2.idx-p1.idx);
-  const base=i=>p1.price+slope*(i-p1.idx);
-  const width=p3.price-base(p3.idx); // signed
+  const i1=ptIdx(p1), i2=ptIdx(p2), i3=ptIdx(p3);
+  const slope=i1===i2?0:(p2.price-p1.price)/(i2-i1);
+  const base=i=>p1.price+slope*(i-i1);
+  const width=p3.price-base(i3); // signed
   return base(idx)+lv*width;
 }
 
@@ -917,7 +1025,7 @@ function drawChannel(ch,si,ei,cw,mn,mx){
     {key:'p3', pt:ch.p3, label:'P3', col:ch.color},
   ];
   ptDefs.forEach(({key, pt, label, col:dc})=>{
-    const px=X(pt.idx,si,cw), py=Y(pt.price,mn,mx);
+    const px=X(ptIdx(pt),si,cw), py=Y(pt.price,mn,mx);
     if(px < P.l-10 || px > W-P.r+10) return; // 화면 밖이면 스킵
     const isSelected = S.edit.chId===ch.id && S.edit.ptKey===key;
     const isHovered  = S.hover && S.hover.chId===ch.id && S.hover.ptKey===key;
@@ -1090,7 +1198,7 @@ function drawDPts(si,ei,cw,mn,mx){
   }
 
   S.drawPts.forEach((pt,i)=>{
-    const x=X(pt.idx,si,cw),y=Y(pt.price,mn,mx);
+    const x=X(pt.idx,si,cw), y=Y(pt.price,mn,mx);
     // 외곽 링
     ctx.strokeStyle=cols[i]; ctx.lineWidth=2;
     ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.stroke();
@@ -1281,8 +1389,10 @@ function handleClick(cx,cy,isMobile=false){
   const snap = magnetSnap(cx, cy, si, cw, mn, mx, isMobile);
   const idx   = snap ? snap.idx   : Math.max(0,Math.min(S.candles.length-1,Math.round(FX(cx,si,cw))));
   const price = snap ? snap.price : FY(cy,mn,mx);
+  // 타임스탬프로 저장 (캔들 추가돼도 위치 고정)
+  const ts = S.candles[idx]?.t || 0;
 
-  S.drawPts.push({idx,price});
+  S.drawPts.push({idx, ts, price});
   const ds=document.getElementById('dstatus');
   if(S.drawStep===1){S.drawStep=2;ds.textContent='② 기준선(lv0) 둘째 점 클릭';}
   else if(S.drawStep===2){S.drawStep=3;ds.textContent='③ 반대편 평행선 위 점 클릭 (위/아래 자유)';}
@@ -1324,7 +1434,7 @@ function findNearestPt(cx, cy, isMobile=false){
   getChans().filter(ch=>ch.visible).forEach(ch=>{
     ['p1','p2','p3'].forEach(key=>{
       const pt=ch[key];
-      const px=X(pt.idx,si,cw), py=Y(pt.price,mn,mx);
+      const px=X(ptIdx(pt),si,cw), py=Y(pt.price,mn,mx);
       const d=Math.hypot(px-cx,py-cy);
       if(d<=hitR && d<bestD){ bestD=d; best={chId:ch.id,ptKey:key}; }
     });
@@ -1342,9 +1452,10 @@ function updateEditPt(cx, cy, isMobile=false){
   const snap=magnetSnap(cx,cy,si,cw,mn,mx,isMobile);
   const idx   = snap ? snap.idx   : Math.max(0,Math.min(S.candles.length-1,Math.round(FX(cx,si,cw))));
   const price = snap ? snap.price : FY(cy,mn,mx);
+  const ts = S.candles[idx]?.t || 0;
   // 자석 미리보기용
   S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=isMobile;
-  ch[S.edit.ptKey]={idx,price};
+  ch[S.edit.ptKey]={idx, ts, price};
   draw();
 }
 
