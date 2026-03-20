@@ -354,6 +354,7 @@ const S = {
   vpZoneState:null,
   vpAlerted:{},
   lastDivKey:{},   // { '15m': { key:true, ... }, '1h': {...} } TF별 분리
+  alertSilent:false, // TF 전환 직후 알림 차단 플래그
   viewOff:0, viewZoom:1,
   yOffset:0, yZoom:1,        // Y축 이동/줌
   drag:false, dragX:0, dragOff:0,
@@ -568,12 +569,11 @@ function loadSym(){
   if(!S.lastDivKey[S.tf]) S.lastDivKey[S.tf]={};
   S.vpAlerted={}; S.vpZoneState=null;
   S.yOffset=0; S.yZoom=1;
-  // TF 전환 시 채널 상태 리셋 + 첫 틱은 silent (알림 없이 상태만 초기화)
+  S.alertSilent=true; // TF 전환 직후 첫 틱까지 모든 채널 알림 차단
   getChans().forEach(ch=>{
     ch.zoneState=null;
     ch.nearState=null;
     ch._lastPrice=null;
-    ch._silentTick=true; // 첫 번째 틱은 알림 없이 상태만 설정
   });
   fetchCandles().then(()=>{
     connectWS();
@@ -1253,6 +1253,8 @@ function chNow(ch){
 }
 
 function checkAllChAlerts(price){
+  // 첫 틱에서 silent 해제 — 이후부터 정상 알림
+  if(S.alertSilent){ S.alertSilent=false; return; }
   getChans().filter(ch=>ch.visible).forEach(ch=>checkChAlerts(ch,price,S.tf));
 }
 
@@ -1263,7 +1265,11 @@ function getLvName(lv){
 function checkChAlerts(ch, price, alertTf=S.tf){
   if(!S.cfg.touch) return;
   const isCurrentTF = (alertTf === S.tf);
-  if(ch._silentTick){ ch._silentTick=false; ch._lastPrice=price; return; }
+  // 전역 silent 플래그 — TF 전환 직후 첫 틱은 상태만 설정, 알림 없음
+  if(S.alertSilent){
+    ch._lastPrice=price; ch.zoneState=null; ch.nearState=null;
+    return;
+  }
 
   const prox = S.cfg.proximity/100;
   const lvs  = chNow(ch);
