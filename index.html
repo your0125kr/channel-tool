@@ -2085,31 +2085,48 @@ async function cloudUpload(){
   setCloudStatus('업로드 중...', 'var(--text2)');
   try{
     const data = buildSaveData();
-    // cfg에서 apiKey는 제외하고 저장 (보안)
     const uploadData = {...data, cfg:{...data.cfg, apiKey:''}};
-    const res = await fetch(JSONBIN_URL, {
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'X-Master-Key': S.cfg.apiKey,
-        'X-Bin-Name': `channel_${Date.now()}`,
-        'X-Bin-Private': 'false'
-      },
-      body: JSON.stringify(uploadData)
-    });
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    // bin ID에서 뒤 6자리만 코드로 사용
-    const fullId = json.metadata?.id || json.metadata?.id || '';
-    const code = fullId.slice(-6).toUpperCase();
-    // 전체 ID는 localStorage에 저장 (나중에 업데이트용)
-    localStorage.setItem('lastBinId', fullId);
-    localStorage.setItem('lastBinCode', code);
-    // 결과 표시
+    const savedBinId = localStorage.getItem('autoBinId');
+    let binId;
+
+    if(savedBinId){
+      // 기존 bin 업데이트 (PUT)
+      const res = await fetch(`${JSONBIN_URL}/${savedBinId}`, {
+        method:'PUT',
+        headers:{'Content-Type':'application/json','X-Master-Key':S.cfg.apiKey},
+        body: JSON.stringify(uploadData)
+      });
+      if(!res.ok) throw new Error(`업데이트 실패 HTTP ${res.status}`);
+      binId = savedBinId;
+    } else {
+      // 최초 업로드 → bin 생성 (POST)
+      const res = await fetch(JSONBIN_URL, {
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'X-Master-Key': S.cfg.apiKey,
+          'X-Bin-Name': 'channel_sync',
+          'X-Bin-Private': 'false'
+        },
+        body: JSON.stringify(uploadData)
+      });
+      if(!res.ok) throw new Error(`업로드 실패 HTTP ${res.status}`);
+      const json = await res.json();
+      binId = json.metadata?.id;
+      if(!binId) throw new Error('bin ID 발급 실패');
+      localStorage.setItem('autoBinId', binId);
+    }
+
+    // 전체 bin ID를 코드로 표시 (이게 폰에서 붙여넣을 코드)
     document.getElementById('uploadResult').style.display='block';
-    document.getElementById('shareCode').textContent=code;
-    setCloudStatus('✅ 업로드 완료!', 'var(--green)');
-    addLog(`☁️ 클라우드 업로드 완료 | 코드: ${code}`, 'success');
+    const el = document.getElementById('shareCode');
+    el.textContent = binId;
+    el.style.fontSize = '11px';
+    el.style.letterSpacing = '0px';
+    el.style.wordBreak = 'break-all';
+    setCloudStatus('✅ 업로드 완료! 코드 전체를 복사해서 폰에 붙여넣으세요', 'var(--green)');
+    updateSyncStatus(binId.slice(-6).toUpperCase());
+    addLog('☁️ 클라우드 업로드 완료', 'success');
   } catch(err){
     setCloudStatus(`❌ 업로드 실패: ${err.message}`, 'var(--red)');
   }
@@ -2117,8 +2134,8 @@ async function cloudUpload(){
 }
 
 async function cloudDownload(){
-  const code = document.getElementById('codeInput').value.trim().toUpperCase();
-  if(!code){ setCloudStatus('⚠️ 코드를 입력해주세요', 'var(--yellow)'); return; }
+  const binId = document.getElementById('codeInput').value.trim();
+  if(!binId){ setCloudStatus('⚠️ 코드를 입력해주세요', 'var(--yellow)'); return; }
   if(!S.cfg.apiKey){
     setCloudStatus('⚠️ 먼저 설정에서 API Key를 입력해주세요', 'var(--yellow)');
     return;
@@ -2126,33 +2143,25 @@ async function cloudDownload(){
   setBtnLoading('btnDownload', true, '▼ 불러오기');
   setCloudStatus('데이터 가져오는 중...', 'var(--text2)');
   try{
-    // 코드(6자리)로 bin 검색
-    const searchRes = await fetch(`${JSONBIN_URL}?page=1`, {
+    // bin ID로 직접 가져오기
+    const res = await fetch(`${JSONBIN_URL}/${binId}/latest`, {
       headers:{ 'X-Master-Key': S.cfg.apiKey }
     });
-    if(!searchRes.ok) throw new Error(`HTTP ${searchRes.status}`);
-    const searchJson = await searchRes.json();
-    // 전체 bin 목록에서 코드(뒤 6자리)가 일치하는 것 찾기
-    const bins = searchJson.result || [];
-    const match = bins.find(b=>(b.id||'').slice(-6).toUpperCase()===code);
-    if(!match) throw new Error('코드와 일치하는 데이터를 찾을 수 없어요');
-    // 해당 bin의 데이터 가져오기
-    const dataRes = await fetch(`${JSONBIN_URL}/${match.id}/latest`, {
-      headers:{ 'X-Master-Key': S.cfg.apiKey }
-    });
-    if(!dataRes.ok) throw new Error(`HTTP ${dataRes.status}`);
-    const dataJson = await dataRes.json();
-    const savedData = dataJson.record;
-    // 이 기기의 autoBinId로 등록 → 이후 자동 동기화
-    localStorage.setItem('autoBinId', match.id);
-    localStorage.setItem('autoBinCode', code);
+    if(!res.ok) throw new Error(`HTTP ${res.status} — bin ID를 확인해주세요`);
+    const json = await res.json();
+    const savedData = json.record;
+    if(!savedData) throw new Error('데이터가 비어있어요');
+
+    // autoBinId 등록 → 이후 자동 동기화
+    localStorage.setItem('autoBinId', binId);
     applySaveData(savedData);
     autoSave();
     loadSym();
-    const totalChs=Object.values(S.channelsByTF).reduce((s,a)=>s+a.length,0);
+    const totalChs = Object.values(S.channelsByTF).reduce((s,a)=>s+a.length, 0);
     setCloudStatus(`✅ 불러오기 완료! 채널 ${totalChs}개 복원`, 'var(--green)');
-    showToast('☁️','클라우드에서 복원됨',`코드 ${code} | 채널 ${totalChs}개`,'t-touch');
-    addLog(`☁️ 클라우드 불러오기 완료 | 코드: ${code}`, 'success');
+    showToast('☁️','클라우드에서 복원됨', `채널 ${totalChs}개`, 't-touch');
+    updateSyncStatus(binId.slice(-6).toUpperCase());
+    addLog('☁️ 클라우드 불러오기 완료', 'success');
   } catch(err){
     setCloudStatus(`❌ 실패: ${err.message}`, 'var(--red)');
   }
