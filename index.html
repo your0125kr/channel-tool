@@ -235,9 +235,14 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
     <div class="srow"><label>확장채널 (-1 / 2) 알림</label><button class="tog on" id="tg-ext" onclick="togS(this,'ext')"></button></div>
     <div class="srow"><label>4번째+ 터치 강조 ⚡</label><button class="tog on" id="tg-4th" onclick="togS(this,'4th')"></button></div>
     <div class="srow">
-      <label>채널 근접 임계값</label>
+      <label>근접 진입 임계값</label>
       <input type="range" min="0.1" max="2" step="0.1" value="0.5" oninput="updCfg('proximity',parseFloat(this.value),this,'prox-v','%')">
       <span class="sval" id="prox-v">0.5%</span>
+    </div>
+    <div class="srow">
+      <label>확인 이탈 임계값</label>
+      <input type="range" min="0.2" max="3" step="0.1" value="1.0" oninput="updCfg('confirmProx',parseFloat(this.value),this,'cprox-v','%')">
+      <span class="sval" id="cprox-v">1.0%</span>
     </div>
 
     <div class="sdiv"></div>
@@ -370,7 +375,7 @@ const S = {
     rdiv:true, hdiv:false, rsi:true,
     rsiOB:70, rsiOS:30, pivotGap:5,
     vp:true, vpAlert:true, vpProx:0.4,
-    sound:true, proximity:0.5,
+    sound:true, proximity:0.5, confirmProx:1.0,
     notifMuted:false,
     apiKey:''
   }
@@ -1253,8 +1258,34 @@ function chNow(ch){
 }
 
 function checkAllChAlerts(price){
-  // 첫 틱에서 silent 해제 — 이후부터 정상 알림
-  if(S.alertSilent){ S.alertSilent=false; return; }
+  if(S.alertSilent){
+    // 첫 틱: 알림 없이 모든 채널 상태만 조용히 설정
+    getChans().filter(ch=>ch.visible).forEach(ch=>{
+      ch._lastPrice = price;
+      ch.zoneState  = null;
+      ch.nearState  = null;
+      // 현재 가격이 어느 구간에 있는지 상태만 설정
+      const prox = S.cfg.proximity/100;
+      const lvs  = chNow(ch);
+      // 근접 구간 감지 (상태만, 알림 없음)
+      let nearZone=null, bd=Infinity;
+      Object.entries(lvs).forEach(([k,lp])=>{
+        const d=Math.abs(price-lp)/lp;
+        if(d<=prox && d<bd){ bd=d; nearZone=k; }
+      });
+      if(nearZone){
+        const lp=lvs[nearZone];
+        ch.nearState={zk:nearZone, isFromAbove:price<=lp, lp};
+        ch.zoneState=nearZone;
+      } else if(lvs['2']&&price>lvs['2']*(1+S.cfg.confirmProx/100)){
+        ch.zoneState='BREAK_HIGH';
+      } else if(lvs['-1']&&price<lvs['-1']*(1-S.cfg.confirmProx/100)){
+        ch.zoneState='BREAK_LOW';
+      }
+    });
+    S.alertSilent=false; // 다음 틱부터 정상 알림
+    return;
+  }
   getChans().filter(ch=>ch.visible).forEach(ch=>checkChAlerts(ch,price,S.tf));
 }
 
@@ -1314,8 +1345,10 @@ function checkChAlerts(ch, price, alertTf=S.tf){
   } else {
     if(ch.nearState){
       const {zk, isFromAbove, lp} = ch.nearState;
-      const escaped_up   = price > lp * (1+prox);
-      const escaped_down = price < lp * (1-prox);
+      // 이탈 판단은 confirmProx(확인 임계값) 기준 — 진입보다 더 벗어나야 확인
+      const cprox = S.cfg.confirmProx/100;
+      const escaped_up   = price > lp * (1+cprox);
+      const escaped_down = price < lp * (1-cprox);
       if(escaped_up || escaped_down){
         const brokeThrough = isFromAbove ? escaped_down : escaped_up;
         fireConfirm(ch, zk, price, lp, brokeThrough?'break':'confirm', isFromAbove, alertTf);
@@ -2046,11 +2079,12 @@ function syncSettingsUI(){
   Object.entries(sliderIds).forEach(([id,val])=>{
     const el=document.getElementById(id); if(el) el.value=val;
   });
-  document.getElementById('prox-v').textContent  = S.cfg.proximity+'%';
-  document.getElementById('ob-v').textContent    = S.cfg.rsiOB;
-  document.getElementById('os-v').textContent    = S.cfg.rsiOS;
-  document.getElementById('pg-v').textContent    = S.cfg.pivotGap;
-  document.getElementById('vpp-v').textContent   = S.cfg.vpProx+'%';
+  document.getElementById('prox-v').textContent   = S.cfg.proximity+'%';
+  document.getElementById('cprox-v').textContent  = (S.cfg.confirmProx||1.0)+'%';
+  document.getElementById('ob-v').textContent     = S.cfg.rsiOB;
+  document.getElementById('os-v').textContent     = S.cfg.rsiOS;
+  document.getElementById('pg-v').textContent     = S.cfg.pivotGap;
+  document.getElementById('vpp-v').textContent    = S.cfg.vpProx+'%';
 }
 
 // 클라우드 자동 저장 딜레이 (연속 변경 시 마지막 것만 업로드)
