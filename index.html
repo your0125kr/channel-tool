@@ -419,9 +419,36 @@ function parseBybitCandle(x){
   return {t:+x[0], o:+x[1], h:+x[2], l:+x[3], c:+x[4], v:+x[5]};
 }
 
+// 캔들 캐시 키 (심볼+TF별 분리)
+function candleCacheKey(){ return `candles_${S.sym}_${S.tf}`; }
+
+// 캐시 저장 (최신 500개만)
+function saveCandleCache(){
+  try{
+    localStorage.setItem(candleCacheKey(), JSON.stringify(S.candles.slice(-500)));
+  }catch(e){}
+}
+
+// 캐시 불러오기 → 즉시 차트 표시
+function loadCandleCache(){
+  try{
+    const raw = localStorage.getItem(candleCacheKey());
+    if(!raw) return false;
+    const cached = JSON.parse(raw);
+    if(!cached||!cached.length) return false;
+    S.candles = cached;
+    S.viewOff = 0;
+    calcRSI(); calcVP(); findDivs(true); draw();
+    return true;
+  }catch(e){ return false; }
+}
+
 async function fetchCandles(){
-  // 로딩 표시
-  if(W&&H){
+  // 캐시 있으면 즉시 차트 표시
+  const hasCached = loadCandleCache();
+
+  // 캐시 없을 때만 로딩 텍스트
+  if(!hasCached && W && H){
     ctx.clearRect(0,0,W,H);
     ctx.fillStyle='#0a0c10'; ctx.fillRect(0,0,W,H);
     ctx.fillStyle='#6b7a90'; ctx.font='14px Noto Sans KR,sans-serif'; ctx.textAlign='center';
@@ -438,23 +465,25 @@ async function fetchCandles(){
     if(!list || !list.length) throw new Error('캔들 데이터 없음');
     S.candles = list.slice().reverse().map(parseBybitCandle);
     S.viewOff = 0;
+    saveCandleCache(); // 최신 500개 캐시 저장
     calcRSI(); calcVP(); findDivs(true); draw();
   }catch(e){
     console.error('fetchCandles 실패:', e);
-    // 캔버스에 에러 메시지 직접 표시
-    if(W&&H){
-      ctx.clearRect(0,0,W,H);
-      ctx.fillStyle='#0a0c10'; ctx.fillRect(0,0,W,H);
-      ctx.fillStyle='#ff3d57'; ctx.font='13px Noto Sans KR,sans-serif'; ctx.textAlign='center';
-      ctx.fillText('데이터 로드 실패', W/2, H/2-20);
-      ctx.fillStyle='#6b7a90'; ctx.font='11px Noto Sans KR,sans-serif';
-      ctx.fillText(e.message, W/2, H/2+5);
-      ctx.fillStyle='#00d4ff';
-      ctx.fillText('화면을 탭하면 재시도합니다', W/2, H/2+30);
+    if(!hasCached){
+      if(W&&H){
+        ctx.clearRect(0,0,W,H);
+        ctx.fillStyle='#0a0c10'; ctx.fillRect(0,0,W,H);
+        ctx.fillStyle='#ff3d57'; ctx.font='13px Noto Sans KR,sans-serif'; ctx.textAlign='center';
+        ctx.fillText('데이터 로드 실패', W/2, H/2-20);
+        ctx.fillStyle='#6b7a90'; ctx.font='11px Noto Sans KR,sans-serif';
+        ctx.fillText(e.message, W/2, H/2+5);
+        ctx.fillStyle='#00d4ff';
+        ctx.fillText('화면을 탭하면 재시도합니다', W/2, H/2+30);
+      }
+      cv.addEventListener('click', ()=>loadSym(), {once:true});
+      cv.addEventListener('touchend', ()=>loadSym(), {once:true});
     }
-    // 탭하면 재시도
-    cv.addEventListener('click', ()=>loadSym(), {once:true});
-    cv.addEventListener('touchend', ()=>loadSym(), {once:true});
+    // 캐시 있으면 캐시 데이터로 계속 사용
   }
 }
 
@@ -1888,7 +1917,7 @@ async function autoCloudSave(){
     const savedBinId = localStorage.getItem('autoBinId');
 
     if(savedBinId){
-      // 기존 bin 업데이트
+      // 기존 bin 업데이트 (PUT - X-Bin-Private 헤더 없어야 함)
       await fetch(`${JSONBIN_URL}/${savedBinId}`, {
         method:'PUT',
         headers:{
@@ -1898,14 +1927,13 @@ async function autoCloudSave(){
         body: JSON.stringify(uploadData)
       });
     } else {
-      // 최초 업로드 → bin 생성
+      // 최초 업로드 → bin 생성 (POST)
       const res = await fetch(JSONBIN_URL, {
         method:'POST',
         headers:{
           'Content-Type':'application/json',
           'X-Master-Key': S.cfg.apiKey,
-          'X-Bin-Name': 'channel_auto_sync',
-          'X-Bin-Private': 'false'
+          'X-Bin-Name': 'channel_sync'
         },
         body: JSON.stringify(uploadData)
       });
@@ -1914,11 +1942,7 @@ async function autoCloudSave(){
         const binId = json.metadata?.id;
         if(binId){
           localStorage.setItem('autoBinId', binId);
-          // 다른 기기에서 쓸 짧은 코드도 저장
-          const code = binId.slice(-6).toUpperCase();
-          localStorage.setItem('autoBinCode', code);
-          // 동기화 코드 상태 표시 업데이트
-          updateSyncStatus(code);
+          updateSyncStatus(binId.slice(-6).toUpperCase());
         }
       }
     }
@@ -2105,8 +2129,7 @@ async function cloudUpload(){
         headers:{
           'Content-Type':'application/json',
           'X-Master-Key': S.cfg.apiKey,
-          'X-Bin-Name': 'channel_sync',
-          'X-Bin-Private': 'false'
+          'X-Bin-Name': 'channel_sync'
         },
         body: JSON.stringify(uploadData)
       });
