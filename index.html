@@ -1323,69 +1323,6 @@ function checkChAlerts(ch, price, alertTf=S.tf){
   }
   ch._lastPrice = price;
 }
-  const prox = S.cfg.proximity/100;
-  const lvs  = chNow(ch);
-
-  // ch.nearState: { zk, isFromAbove } — 현재 NEAR 중인 레벨 정보
-  if(!ch.nearState) ch.nearState = null;
-
-  // ── 전체 채널 밖 돌파 체크 (기존 BREAK_HIGH/LOW) ──
-  if(lvs['2'] && price > lvs['2']*(1+prox)){
-    if(ch.zoneState!=='BREAK_HIGH'){ ch.zoneState='BREAK_HIGH'; ch.nearState=null; fireBreak(ch,'BREAK_HIGH',price); draw(); }
-    return;
-  }
-  if(lvs['-1'] && price < lvs['-1']*(1-prox)){
-    if(ch.zoneState!=='BREAK_LOW'){ ch.zoneState='BREAK_LOW'; ch.nearState=null; fireBreak(ch,'BREAK_LOW',price); draw(); }
-    return;
-  }
-
-  // ── 근접 구간 감지 ──
-  let nearZone=null, bd=Infinity;
-  Object.entries(lvs).forEach(([k,lp])=>{
-    const d=Math.abs(price-lp)/lp;
-    if(d<=prox && d<bd){ bd=d; nearZone=k; }
-  });
-
-  if(nearZone){
-    // 새로운 레벨 근접 진입
-    if(!ch.nearState || ch.nearState.zk !== nearZone){
-      const lp = lvs[nearZone];
-      // 접근 방향 판단 (이전 상태 기준)
-      const prevPrice = ch._lastPrice || price;
-      const isFromAbove = prevPrice > lp; // 위에서 내려옴 = 지지 접근
-      ch.nearState = { zk:nearZone, isFromAbove, lp };
-      ch.zoneState = nearZone;
-      ch.touchCounts[nearZone] = (ch.touchCounts[nearZone]||0)+1;
-      // 근접 알림
-      fireNear(ch, nearZone, price, lp, isFromAbove, ch.touchCounts[nearZone]);
-      draw();
-    }
-  } else {
-    // 근접 구간을 벗어남 → 결과 확인 알림
-    if(ch.nearState){
-      const {zk, isFromAbove, lp} = ch.nearState;
-      // 이탈 방향 판단
-      const escaped_up   = price > lp * (1+prox);
-      const escaped_down = price < lp * (1-prox);
-      if(escaped_up || escaped_down){
-        const brokeThrough = isFromAbove ? escaped_down : escaped_up;
-        if(brokeThrough){
-          // 접근 방향과 같은 방향 이탈 → 돌파
-          fireConfirm(ch, zk, price, lp, 'break', isFromAbove);
-        } else {
-          // 접근 방향 반대로 이탈 → 지지/저항 확인
-          fireConfirm(ch, zk, price, lp, 'confirm', isFromAbove);
-        }
-        ch.nearState = null;
-        ch.zoneState = null;
-        draw();
-      }
-    } else {
-      ch.zoneState = null;
-    }
-  }
-  ch._lastPrice = price;
-}
 
 // 근접 알림
 function fireNear(ch, zk, price, lp, isFromAbove, tc, alertTf=S.tf){
