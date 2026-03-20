@@ -46,8 +46,9 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
   position:absolute;left:10px;top:10px;background:rgba(10,12,16,.95);
   border:1px solid var(--border);border-radius:10px;padding:10px;
   min-width:200px;z-index:50;backdrop-filter:blur(10px);display:none;
+  user-select:none;
 }
-#chpanel h4{color:var(--accent);font-size:11px;margin-bottom:8px;font-family:'JetBrains Mono',monospace}
+#chpanel h4{color:var(--accent);font-size:11px;margin-bottom:8px;font-family:'JetBrains Mono',monospace;cursor:move;padding-bottom:4px;border-bottom:1px solid var(--border)}
 .ch-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:11px}
 .ch-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;cursor:pointer}
 .ch-name{flex:1;font-family:'JetBrains Mono',monospace;font-size:11px}
@@ -60,7 +61,8 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
   position:absolute;right:72px;top:10px;background:rgba(10,12,16,.9);
   border:1px solid var(--border);border-radius:8px;padding:8px 10px;
   font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8;
-  backdrop-filter:blur(8px);pointer-events:none;display:none;
+  backdrop-filter:blur(8px);display:none;
+  cursor:move;user-select:none;z-index:50;
 }
 .ir{display:flex;gap:5px;align-items:center}
 .id{width:7px;height:7px;border-radius:50%;flex-shrink:0}
@@ -192,7 +194,10 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
 
   <!-- Info panel (shows selected channel levels) -->
   <div id="infopanel">
-    <div style="font-size:9px;color:var(--text2);margin-bottom:4px;font-family:'JetBrains Mono',monospace" id="info-ch-name">CH1</div>
+    <div style="font-size:9px;color:var(--text2);margin-bottom:4px;font-family:'JetBrains Mono',monospace;display:flex;justify-content:space-between;align-items:center">
+      <span id="info-ch-name">CH1</span>
+      <span style="opacity:.4;font-size:9px">⠿ drag</span>
+    </div>
     <div class="ir"><div class="id" style="background:#b388ff"></div><div class="il">-1.0</div><div class="iv" id="lm1">--</div></div>
     <div class="ir"><div class="id" style="background:rgba(179,136,255,.5)"></div><div class="il">-0.5</div><div class="iv" id="lm05">--</div></div>
     <div class="ir"><div class="id" id="l0dot" style="background:#00d4ff"></div><div class="il">0 ▶</div><div class="iv" id="l0">--</div></div>
@@ -559,12 +564,17 @@ function stopDataFeed(){
 
 function loadSym(){
   stopDataFeed();
-  // lastDivKey TF별 분리 — 전환해도 이전 TF 기록 유지
   if(!S.lastDivKey) S.lastDivKey={};
   if(!S.lastDivKey[S.tf]) S.lastDivKey[S.tf]={};
   S.vpAlerted={}; S.vpZoneState=null;
   S.yOffset=0; S.yZoom=1;
-  getChans().forEach(ch=>{ch.zoneState=null;});
+  // TF 전환 시 채널 상태 리셋 + 첫 틱은 silent (알림 없이 상태만 초기화)
+  getChans().forEach(ch=>{
+    ch.zoneState=null;
+    ch.nearState=null;
+    ch._lastPrice=null;
+    ch._silentTick=true; // 첫 번째 틱은 알림 없이 상태만 설정
+  });
   fetchCandles().then(()=>{
     connectWS();
     startBgPolling();
@@ -612,12 +622,9 @@ async function bgPollTF(tf, key, chans){
   }catch(e){}
 }
 
-// TF 지정 채널 알림 체크 (백그라운드 TF용)
+// TF 지정 채널 알림 체크 (백그라운드 TF용) — S.tf 절대 건드리지 않음
 function checkChAlertsForTF(ch, price, tf){
-  const origTf=S.tf;
-  S.tf=tf;
-  checkChAlerts(ch, price);
-  S.tf=origTf;
+  checkChAlerts(ch, price, tf); // tf 파라미터로 전달
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1246,15 +1253,76 @@ function chNow(ch){
 }
 
 function checkAllChAlerts(price){
-  getChans().filter(ch=>ch.visible).forEach(ch=>checkChAlerts(ch,price));
+  getChans().filter(ch=>ch.visible).forEach(ch=>checkChAlerts(ch,price,S.tf));
 }
 
 function getLvName(lv){
   return lv===0?'기준선(0)':lv===1?'평행선(1)':lv===-1?'확장 하단(-1)':lv===2?'확장 상단(2)':`레벨 ${lv}`;
 }
 
-function checkChAlerts(ch, price){
+function checkChAlerts(ch, price, alertTf=S.tf){
   if(!S.cfg.touch) return;
+  const isCurrentTF = (alertTf === S.tf);
+  if(ch._silentTick){ ch._silentTick=false; ch._lastPrice=price; return; }
+
+  const prox = S.cfg.proximity/100;
+  const lvs  = chNow(ch);
+  if(!ch.nearState) ch.nearState = null;
+
+  // ── 전체 채널 밖 돌파 체크 ──
+  if(lvs['2'] && price > lvs['2']*(1+prox)){
+    if(ch.zoneState!=='BREAK_HIGH'){
+      ch.zoneState='BREAK_HIGH'; ch.nearState=null;
+      fireBreak(ch,'BREAK_HIGH',price,alertTf);
+      if(isCurrentTF) draw();
+    }
+    return;
+  }
+  if(lvs['-1'] && price < lvs['-1']*(1-prox)){
+    if(ch.zoneState!=='BREAK_LOW'){
+      ch.zoneState='BREAK_LOW'; ch.nearState=null;
+      fireBreak(ch,'BREAK_LOW',price,alertTf);
+      if(isCurrentTF) draw();
+    }
+    return;
+  }
+
+  // ── 근접 구간 감지 ──
+  let nearZone=null, bd=Infinity;
+  Object.entries(lvs).forEach(([k,lp])=>{
+    const d=Math.abs(price-lp)/lp;
+    if(d<=prox && d<bd){ bd=d; nearZone=k; }
+  });
+
+  if(nearZone){
+    if(!ch.nearState || ch.nearState.zk !== nearZone){
+      const lp = lvs[nearZone];
+      const prevPrice = ch._lastPrice || price;
+      const isFromAbove = prevPrice > lp;
+      ch.nearState = { zk:nearZone, isFromAbove, lp };
+      ch.zoneState = nearZone;
+      ch.touchCounts[nearZone] = (ch.touchCounts[nearZone]||0)+1;
+      fireNear(ch, nearZone, price, lp, isFromAbove, ch.touchCounts[nearZone], alertTf);
+      if(isCurrentTF) draw();
+    }
+  } else {
+    if(ch.nearState){
+      const {zk, isFromAbove, lp} = ch.nearState;
+      const escaped_up   = price > lp * (1+prox);
+      const escaped_down = price < lp * (1-prox);
+      if(escaped_up || escaped_down){
+        const brokeThrough = isFromAbove ? escaped_down : escaped_up;
+        fireConfirm(ch, zk, price, lp, brokeThrough?'break':'confirm', isFromAbove, alertTf);
+        ch.nearState = null;
+        ch.zoneState = null;
+        if(isCurrentTF) draw();
+      }
+    } else {
+      ch.zoneState = null;
+    }
+  }
+  ch._lastPrice = price;
+}
   const prox = S.cfg.proximity/100;
   const lvs  = chNow(ch);
 
@@ -1320,64 +1388,60 @@ function checkChAlerts(ch, price){
 }
 
 // 근접 알림
-function fireNear(ch, zk, price, lp, isFromAbove, tc){
+function fireNear(ch, zk, price, lp, isFromAbove, tc, alertTf=S.tf){
   const lv  = parseFloat(zk);
   const is4 = tc>=4 && S.cfg['4th'];
   const isExt = lv<=-0.5 || lv>=1.5;
   if(isExt && !S.cfg.ext) return;
-
   const srText  = isFromAbove ? '지지' : '저항';
   const srEmoji = isFromAbove ? '🟢' : '🔴';
   const lvName  = getLvName(lv);
-
   let emoji, title, sub, cls;
   if(is4){
     emoji='⚡'; cls='t-4th';
-    title=`[${S.tf}] ${ch.name} ${lvName} ${tc}번째 터치 — 돌파 주목!`;
+    title=`[${alertTf}] ${ch.name} ${lvName} ${tc}번째 터치 — 돌파 주목!`;
     sub=`${srEmoji} ${srText} 근접 | 가격 ${fp(price)}`;
   } else {
     emoji='📍'; cls=isFromAbove?'t-bull':'t-bear';
-    title=`[${S.tf}] ${ch.name} ${lvName} ${srText} 근접`;
+    title=`[${alertTf}] ${ch.name} ${lvName} ${srText} 근접`;
     sub=`가격 ${fp(price)} | 레벨 ${fp(lp)}`;
   }
-  showToast(emoji,title,sub,cls);
+  showToast(emoji,title,sub,cls,alertTf);
   sendNotif(title,sub);
   playSound(is4?'high':isExt?'mid':isFromAbove?'bull':'bear');
   addLog(`${emoji} ${title} | ${sub}`, cls);
 }
 
-// 결과 확인 알림 (지지확인 / 저항확인 / 돌파확인)
-function fireConfirm(ch, zk, price, lp, type, isFromAbove){
+// 결과 확인 알림
+function fireConfirm(ch, zk, price, lp, type, isFromAbove, alertTf=S.tf){
   const lv = parseFloat(zk);
   const isExt = lv<=-0.5 || lv>=1.5;
   if(isExt && !S.cfg.ext) return;
   const lvName = getLvName(lv);
-
   let emoji, title, sub, cls;
   if(type==='break'){
-    // 돌파
-    const breakUp = !isFromAbove; // 아래서 올라와서 위로 뚫음
-    emoji = breakUp ? '🚀' : '💥';
-    cls   = 't-break';
-    title = `[${S.tf}] ${ch.name} ${lvName} ${breakUp?'상방 돌파':'하방 돌파'} 확인!`;
+    const breakUp = !isFromAbove;
+    emoji = breakUp ? '🚀' : '💥'; cls='t-break';
+    title = `[${alertTf}] ${ch.name} ${lvName} ${breakUp?'상방 돌파':'하방 돌파'} 확인!`;
     sub   = `가격 ${fp(price)} | 레벨 ${fp(lp)}`;
   } else {
-    // 지지 or 저항 확인
     emoji = isFromAbove ? '🟢' : '🔴';
     cls   = isFromAbove ? 't-bull' : 't-bear';
-    title = `[${S.tf}] ${ch.name} ${lvName} ${isFromAbove?'지지':'저항'} 확인!`;
+    title = `[${alertTf}] ${ch.name} ${lvName} ${isFromAbove?'지지':'저항'} 확인!`;
     sub   = `가격 ${fp(price)} | 레벨 ${fp(lp)}`;
   }
-  showToast(emoji,title,sub,cls);
+  showToast(emoji,title,sub,cls,alertTf);
   sendNotif(title,sub);
   playSound(type==='break'?'break':isFromAbove?'bull':'bear');
   addLog(`${emoji} ${title} | ${sub}`, cls);
 }
 
-function fireBreak(ch,zone,price){
+function fireBreak(ch, zone, price, alertTf=S.tf){
   const up=zone==='BREAK_HIGH';
-  const e=up?'🚀':'💥',t=`[${S.tf}] ${ch.name} ${up?'채널 상단 완전 돌파!':'채널 하단 완전 이탈!'}`,s=`현재가 ${fp(price)}`;
-  showToast(e,t,s,'t-break'); sendNotif(t,s); playSound('break');
+  const e=up?'🚀':'💥';
+  const t=`[${alertTf}] ${ch.name} ${up?'채널 상단 완전 돌파!':'채널 하단 완전 이탈!'}`;
+  const s=`현재가 ${fp(price)}`;
+  showToast(e,t,s,'t-break',alertTf); sendNotif(t,s); playSound('break');
   addLog(`${e} ${t} | ${s}`,'t-break');
 }
 
@@ -1607,10 +1671,27 @@ function playSound(t){
 // ═══════════════════════════════════════════════════════
 //  UI HELPERS
 // ═══════════════════════════════════════════════════════
-function showToast(icon,title,sub,cls){
+function showToast(icon,title,sub,cls,tapTf=null){
   const c=document.getElementById('toasts');
   const el=document.createElement('div'); el.className=`toast ${cls}`;
-  el.innerHTML=`<div class="ti">${icon}</div><div class="tb2"><div class="tt">${title}</div><div class="ts">${sub}</div></div><div class="tx" onclick="this.parentElement.remove()">×</div>`;
+  // tapTf가 있고 현재 TF와 다르면 탭 가능 표시
+  const isTappable = tapTf && tapTf!==S.tf;
+  const tapHint = isTappable ? `<div style="font-size:9px;color:var(--accent);margin-top:3px;opacity:.8">👆 탭하면 ${tapTf} 차트로 이동</div>` : '';
+  el.innerHTML=`<div class="ti">${icon}</div><div class="tb2"><div class="tt">${title}</div><div class="ts">${sub}</div>${tapHint}</div><div class="tx" onclick="event.stopPropagation();this.parentElement.remove()">×</div>`;
+  // 토스트 본문 탭 → TF 전환
+  if(isTappable){
+    el.style.cursor='pointer';
+    el.addEventListener('click', e=>{
+      if(e.target.classList.contains('tx')) return;
+      // TF 칩 전환
+      document.querySelectorAll('.chip.tf').forEach(b=>{
+        b.classList.toggle('active', b.dataset.tf===tapTf);
+      });
+      S.tf=tapTf;
+      loadSym();
+      el.remove();
+    });
+  }
   c.prepend(el);
   setTimeout(()=>{if(el.parentElement){el.style.transition='opacity .4s';el.style.opacity='0';setTimeout(()=>el.remove(),400);}},9000);
   while(c.children.length>5)c.lastElementChild.remove();
@@ -2347,6 +2428,47 @@ function copyCode(){
 }
 
 // ═══════════════════════════════════════════════════════
+//  DRAGGABLE PANELS
+// ═══════════════════════════════════════════════════════
+function makeDraggable(el, handle, storageKey){
+  let isDragging=false, startX=0, startY=0, origLeft=0, origTop=0;
+
+  // 저장된 위치 복원
+  try{
+    const saved=localStorage.getItem(storageKey);
+    if(saved){
+      const pos=JSON.parse(saved);
+      el.style.left=pos.left; el.style.top=pos.top;
+      el.style.right='auto';
+    }
+  }catch(e){}
+
+  function savePos(){
+    try{ localStorage.setItem(storageKey,JSON.stringify({left:el.style.left,top:el.style.top})); }catch(e){}
+  }
+  function onStart(cx,cy){
+    isDragging=true; startX=cx; startY=cy;
+    origLeft=el.offsetLeft; origTop=el.offsetTop;
+    el.style.right='auto';
+  }
+  function onMove(cx,cy){
+    if(!isDragging) return;
+    const wrap=document.getElementById('cwrap');
+    const nx=Math.max(0,Math.min(wrap.clientWidth-el.offsetWidth,  origLeft+(cx-startX)));
+    const ny=Math.max(0,Math.min(wrap.clientHeight-el.offsetHeight, origTop+(cy-startY)));
+    el.style.left=nx+'px'; el.style.top=ny+'px';
+  }
+  function onEnd(){ if(isDragging){ isDragging=false; savePos(); } }
+
+  handle.addEventListener('mousedown', e=>{ e.preventDefault(); onStart(e.clientX,e.clientY); });
+  document.addEventListener('mousemove', e=>{ if(isDragging) onMove(e.clientX,e.clientY); });
+  document.addEventListener('mouseup', onEnd);
+  handle.addEventListener('touchstart', e=>{ e.preventDefault(); onStart(e.touches[0].clientX,e.touches[0].clientY); },{passive:false});
+  document.addEventListener('touchmove', e=>{ if(isDragging){ e.preventDefault(); onMove(e.touches[0].clientX,e.touches[0].clientY); } },{passive:false});
+  document.addEventListener('touchend', onEnd);
+}
+
+// ═══════════════════════════════════════════════════════
 //  PWA / SW
 // ═══════════════════════════════════════════════════════
 if('serviceWorker' in navigator){
@@ -2364,13 +2486,22 @@ setTimeout(()=>{
     showToast('📱','iPhone 잠금화면 알림 안내','Safari → 공유 → 홈 화면에 추가 후 앱으로 실행하세요','t-touch');
 },2500);
 resize();
-autoLoad(); // localStorage + 클라우드 복원 시도
-// 동기화 상태 표시
+autoLoad();
 updateSyncStatus();
-// 모바일이면 폴링 뱃지 표시
 if(IS_MOBILE) document.getElementById('poll-badge').style.display='inline';
-// API Key input 복원
 setTimeout(()=>{ const ak=document.getElementById('apiKeyInput'); if(ak&&S.cfg.apiKey) ak.value=S.cfg.apiKey; },100);
+
+// 패널 드래그 초기화
+setTimeout(()=>{
+  // infopanel: 전체가 드래그 핸들
+  const infopanel=document.getElementById('infopanel');
+  makeDraggable(infopanel, infopanel, 'panel_pos_info');
+  // chpanel: h4 제목줄이 드래그 핸들
+  const chpanel=document.getElementById('chpanel');
+  const chhandle=chpanel.querySelector('h4');
+  makeDraggable(chpanel, chhandle, 'panel_pos_ch');
+},300);
+
 loadSym();
 </script>
 </body>
