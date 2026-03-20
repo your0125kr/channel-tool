@@ -408,15 +408,34 @@ function rsiTop(){ return P.t+mainH()+RSI_GAP; }
 // ═══════════════════════════════════════════════════════
 async function fetchCandles(){
   try{
-    const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${S.sym}&interval=${S.tf}&limit=500`);
+    const r=await fetchWithFallback(`/api/v3/klines?symbol=${S.sym}&interval=${S.tf}&limit=500`);
     const d=await r.json();
     S.candles=d.map(x=>({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5]}));
     S.viewOff=0;
-    calcRSI(); calcVP(); findDivs(true); draw(); // silent=true: 과거 다이버전스 등록만, 알림 없음
-  }catch(e){console.error(e);}
+    calcRSI(); calcVP(); findDivs(true); draw();
+  }catch(e){
+    console.error('fetchCandles 실패:', e);
+    showToast('⚠️','데이터 로드 실패','네트워크 연결을 확인해주세요','t-ext');
+  }
 }
 
-// 모바일(터치) 기기 감지 — iOS Safari는 WebSocket이 막히므로 폴링 방식 사용
+// Binance API 엔드포인트 (막히면 순서대로 시도)
+const BINANCE_HOSTS = [
+  'https://api.binance.com',
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+];
+
+async function fetchWithFallback(path){
+  for(const host of BINANCE_HOSTS){
+    try{
+      const r = await fetch(host + path, {signal: AbortSignal.timeout(5000)});
+      if(r.ok) return r;
+    }catch(e){ console.warn(`${host} 실패, 다음 시도...`); }
+  }
+  throw new Error('모든 Binance 엔드포인트 실패');
+}
 const IS_MOBILE = window.matchMedia('(pointer:coarse)').matches
                || /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
@@ -428,7 +447,7 @@ function connectWS(){
     if(_pollTimer) clearInterval(_pollTimer);
     _pollTimer = setInterval(async ()=>{
       try{
-        const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${S.sym}&interval=${S.tf}&limit=2`);
+        const r=await fetchWithFallback(`/api/v3/klines?symbol=${S.sym}&interval=${S.tf}&limit=2`);
         const d=await r.json();
         if(!d||!d.length) return;
         const last=d[d.length-1];
