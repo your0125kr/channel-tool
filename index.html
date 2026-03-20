@@ -406,11 +406,30 @@ function rsiTop(){ return P.t+mainH()+RSI_GAP; }
 // ═══════════════════════════════════════════════════════
 //  DATA
 // ═══════════════════════════════════════════════════════
+//  DATA  (Bybit API — Binance 대비 CORS/iOS 호환 우수)
+// ═══════════════════════════════════════════════════════
+
+// Bybit TF 매핑 (Bybit interval 단위)
+const BYBIT_TF = {'15m':'15','30m':'30','1h':'60','1d':'D','1w':'W'};
+const BYBIT_BASE = 'https://api.bybit.com';
+
+// Bybit 캔들 → 내부 포맷 변환
+// Bybit 응답: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
+function parseBybitCandle(x){
+  return {t:+x[0], o:+x[1], h:+x[2], l:+x[3], c:+x[4], v:+x[5]};
+}
+
 async function fetchCandles(){
   try{
-    const r=await fetchWithFallback(`/api/v3/klines?symbol=${S.sym}&interval=${S.tf}&limit=500`);
-    const d=await r.json();
-    S.candles=d.map(x=>({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5]}));
+    const interval = BYBIT_TF[S.tf] || '15';
+    const url = `${BYBIT_BASE}/v5/market/kline?category=linear&symbol=${S.sym}&interval=${interval}&limit=500`;
+    const r = await fetch(url, {signal: AbortSignal.timeout(10000)});
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const list = d?.result?.list;
+    if(!list||!list.length) throw new Error('데이터 없음');
+    // Bybit는 최신순으로 반환 → 역순 정렬
+    S.candles = list.slice().reverse().map(parseBybitCandle);
     S.viewOff=0;
     calcRSI(); calcVP(); findDivs(true); draw();
   }catch(e){
@@ -419,33 +438,7 @@ async function fetchCandles(){
   }
 }
 
-// Binance API 엔드포인트 — 모바일은 CORS 프록시 경유
-const BINANCE_HOSTS = [
-  'https://api.binance.com',
-  'https://api1.binance.com',
-  'https://api2.binance.com',
-  'https://api3.binance.com',
-];
-const CORS_PROXY = 'https://corsproxy.io/?';
-
-async function fetchWithFallback(path){
-  // 모바일은 CORS 프록시 먼저 시도
-  if(IS_MOBILE){
-    try{
-      const url = CORS_PROXY + encodeURIComponent('https://api.binance.com' + path);
-      const r = await fetch(url, {signal: AbortSignal.timeout(8000)});
-      if(r.ok) return r;
-    }catch(e){ console.warn('CORS 프록시 실패, 직접 시도...'); }
-  }
-  // PC 또는 프록시 실패 시 직접 시도
-  for(const host of BINANCE_HOSTS){
-    try{
-      const r = await fetch(host + path, {signal: AbortSignal.timeout(5000)});
-      if(r.ok) return r;
-    }catch(e){ console.warn(`${host} 실패`); }
-  }
-  throw new Error('모든 엔드포인트 실패');
-}
+// ── 모바일(터치) 기기 감지 ──
 const IS_MOBILE = window.matchMedia('(pointer:coarse)').matches
                || /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
@@ -453,16 +446,20 @@ let _pollTimer = null;
 
 function connectWS(){
   if(IS_MOBILE){
-    // 모바일: 폴링 방식 (5초마다 REST API 호출)
+    // 모바일: Bybit REST 폴링 (5초)
     if(_pollTimer) clearInterval(_pollTimer);
     _pollTimer = setInterval(async ()=>{
       try{
-        const r=await fetchWithFallback(`/api/v3/klines?symbol=${S.sym}&interval=${S.tf}&limit=2`);
-        const d=await r.json();
-        if(!d||!d.length) return;
-        const last=d[d.length-1];
-        const c={t:last[0],o:+last[1],h:+last[2],l:+last[3],c:+last[4],v:+last[5]};
-        const prev=S.candles[S.candles.length-1];
+        const interval = BYBIT_TF[S.tf] || '15';
+        const url = `${BYBIT_BASE}/v5/market/kline?category=linear&symbol=${S.sym}&interval=${interval}&limit=2`;
+        const r = await fetch(url, {signal: AbortSignal.timeout(8000)});
+        if(!r.ok) return;
+        const d = await r.json();
+        const list = d?.result?.list;
+        if(!list||!list.length) return;
+        // 최신 캔들 (index 0)
+        const c = parseBybitCandle(list[0]);
+        const prev = S.candles[S.candles.length-1];
         if(prev&&prev.t===c.t) S.candles[S.candles.length-1]=c;
         else{ S.candles.push(c); if(S.candles.length>500)S.candles.shift(); }
         S.curPrice=c.c;
@@ -475,23 +472,33 @@ function connectWS(){
     }, 5000);
     return;
   }
-  // PC: WebSocket 실시간
+  // PC: Bybit WebSocket 실시간
   if(S.ws){S.ws.close();S.ws=null;}
-  S.ws=new WebSocket(`wss://stream.binance.com:9443/ws/${S.sym.toLowerCase()}@kline_${S.tf}`);
-  S.ws.onmessage=e=>{
-    const k=JSON.parse(e.data).k;
-    const c={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,v:+k.v};
-    const last=S.candles[S.candles.length-1];
-    if(last&&last.t===c.t) S.candles[S.candles.length-1]=c;
-    else{ S.candles.push(c); if(S.candles.length>500)S.candles.shift(); }
-    S.curPrice=c.c;
-    document.getElementById('cprice').textContent=fp(c.c);
-    calcRSI(); calcVP(); findDivs();
-    checkAllChAlerts(c.c);
-    checkVPAlerts(c.c);
-    draw();
+  const interval = BYBIT_TF[S.tf] || '15';
+  S.ws = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+  S.ws.onopen = ()=>{
+    S.ws.send(JSON.stringify({
+      op:'subscribe',
+      args:[`kline.${interval}.${S.sym}`]
+    }));
   };
-  S.ws.onclose=()=>setTimeout(connectWS,3000);
+  S.ws.onmessage = e=>{
+    const msg = JSON.parse(e.data);
+    if(msg.topic && msg.data && msg.data.length){
+      const k = msg.data[0];
+      const c = {t:k.start, o:+k.open, h:+k.high, l:+k.low, c:+k.close, v:+k.volume};
+      const last = S.candles[S.candles.length-1];
+      if(last&&last.t===c.t) S.candles[S.candles.length-1]=c;
+      else{ S.candles.push(c); if(S.candles.length>500)S.candles.shift(); }
+      S.curPrice=c.c;
+      document.getElementById('cprice').textContent=fp(c.c);
+      calcRSI(); calcVP(); findDivs();
+      checkAllChAlerts(c.c);
+      checkVPAlerts(c.c);
+      draw();
+    }
+  };
+  S.ws.onclose = ()=>setTimeout(connectWS, 3000);
 }
 
 function stopDataFeed(){
