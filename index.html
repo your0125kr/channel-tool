@@ -756,26 +756,30 @@ function findDivs(silent=false){
     if((p2-p1)/p1<MIN_P) continue; if(r1-r2<MIN_R) continue;
     S.divs.push({type:'bear',i1,i2,p1,p2,r1,r2});
   }
-  // ── Hidden Bullish: price HL + RSI LL ──
+  // ── Hidden Bullish: price HL + RSI LL — 두 피벗 모두 OS 이하 ──
   for(let b=1;b<L.length;b++){
     const i2=L[b], i1=L[b-1];
     if(i2-i1<gap) continue;
     if(n-i2<=CONFIRM) continue;
     const r1=rsi[i1], r2=rsi[i2];
     if(!r1||!r2) continue;
+    // 두 피벗 모두 OS(30) 이하 — 엄격 필터
+    if(r1>OS||r2>OS) continue;
     const p1=C[i1].l, p2=C[i2].l;
     if(p2<=p1) continue; if(r2>=r1) continue;
     if(Math.abs(p2-p1)/p1<MIN_P) continue;
     if(Math.abs(r2-r1)<MIN_R) continue;
     S.hdivs.push({type:'hbull',i1,i2,p1,p2,r1,r2});
   }
-  // ── Hidden Bearish: price LH + RSI HH ──
+  // ── Hidden Bearish: price LH + RSI HH — 두 피벗 모두 OB 이상 ──
   for(let b=1;b<H.length;b++){
     const i2=H[b], i1=H[b-1];
     if(i2-i1<gap) continue;
     if(n-i2<=CONFIRM) continue;
     const r1=rsi[i1], r2=rsi[i2];
     if(!r1||!r2) continue;
+    // 두 피벗 모두 OB(70) 이상 — 엄격 필터
+    if(r1<OB||r2<OB) continue;
     const p1=C[i1].h, p2=C[i2].h;
     if(p2>=p1) continue; if(r2<=r1) continue;
     if(Math.abs(p2-p1)/p1<MIN_P) continue;
