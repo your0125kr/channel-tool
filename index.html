@@ -2141,7 +2141,15 @@ cv.addEventListener('mousemove',e=>{
     if(dx>DRAG_THRESH||dy>DRAG_THRESH){
       S.dragAxis = dx>=dy ? 'x' : 'y';
       if(S.dragAxis==='y'){
-        const{si,ei}=visR(); S.frozenScale=prR(si,ei);
+        // Y드래그 시작 시 현재 스케일 고정 (매번 prR 재계산 방지)
+        const{si,ei}=visR();
+        const sl=S.candles.slice(si,ei);
+        if(sl.length){
+          let mn=Infinity,mx=-Infinity;
+          sl.forEach(c=>{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);});
+          const pad=(mx-mn)*0.08;
+          S.frozenScale={mn:mn-pad, mx:mx+pad};
+        }
         S.yDragOffset=S.yOffset; S.yDragY=e.clientY;
       }
       cv.style.cursor='grabbing';
@@ -2156,7 +2164,7 @@ cv.addEventListener('mousemove',e=>{
   }
   // Y축 드래그
   if(S.drag && S.dragAxis==='y'){
-    S.yOffset=S.yDragOffset+(e.clientY-S.yDragY)/mainH()*1.5;
+    S.yOffset=S.yDragOffset-(e.clientY-S.yDragY)/mainH()*2.5;
     hideCrosshair(); draw(); return;
   }
   // 작도 중 자석 미리보기
@@ -2199,11 +2207,12 @@ cv.addEventListener('mousedown',e=>{
 
 cv.addEventListener('mouseup',()=>{
   if(S.edit.dragging){ commitEditPt(); return; }
-  if(S.drag && S.dragAxis==='y') S.frozenScale=null;
   const wasDragging = S.drag && S.dragAxis!==null;
+  const wasYDrag = S.drag && S.dragAxis==='y';
   S.drag=false; S.dragAxis=null;
+  if(wasYDrag){ S.frozenScale=null; } // Y드래그 끝나면 frozenScale 해제
   cv.style.cursor='default';
-  if(wasDragging) draw(true); // 드래그 끝나면 전체 다시 그리기
+  if(wasDragging) draw(true);
 });
 
 // PC: 더블클릭 Y축 리셋
@@ -2323,7 +2332,7 @@ cv.addEventListener('touchmove',e=>{
       const{cw}=visR();
       S.viewOff=Math.max(0,Math.min(S.candles.length-10,S.dragOff+Math.round(-(tx-S.dragX)/cw)));
     } else {
-      S.yOffset=S.yDragOffset+(ty-S.yDragY)/mainH()*1.5;
+      S.yOffset=S.yDragOffset-(ty-S.yDragY)/mainH()*2.5;
     }
     draw();
   } else if(e.touches.length===2){
@@ -2343,12 +2352,13 @@ cv.addEventListener('touchmove',e=>{
 cv.addEventListener('touchend',e=>{
   clearTimeout(longPressTimer);
   if(S.edit.dragging){ commitEditPt(); return; }
-  if(S.drag && S.dragAxis==='y') S.frozenScale=null;
   const wasDragging = S.drag && S.dragAxis!==null;
+  const wasYDrag = S.drag && S.dragAxis==='y';
   if(S.drawMode){ S.magnet.active=false; return; }
   if(CH_STATE.active){ hideCrosshair(); return; }
   S.drag=false; S.dragAxis=null;
-  if(wasDragging) draw(true); // 드래그 끝나면 전체 다시 그리기
+  if(wasYDrag) S.frozenScale=null;
+  if(wasDragging) draw(true);
 });
 
 document.querySelectorAll('.chip.sym').forEach(b=>{
