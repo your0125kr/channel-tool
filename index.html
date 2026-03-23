@@ -935,24 +935,41 @@ function FY(y,mn,mx){return mn+(1-(y-P.t)/mainH())*(mx-mn);}
 function FX(x,si,cw){return(x-P.l-cw/2)/cw+si;}
 function RY(v){return rsiTop()+(1-v/100)*RSI_H;}
 
-function draw(){
+// ── rAF 렌더 루프 ─────────────────────────────────────
+let _rafPending = false;
+let _needsFullDraw = true;
+
+function draw(full=true){
+  if(full) _needsFullDraw=true;
+  if(_rafPending) return;
+  _rafPending=true;
+  requestAnimationFrame(()=>{
+    _rafPending=false;
+    _doDraw(_needsFullDraw);
+    _needsFullDraw=false;
+  });
+}
+
+function _doDraw(full=true){
   if(!W||!H) return;
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#0a0c10'; ctx.fillRect(0,0,W,H);
   const{si,ei,cw}=visR();
   const{mn,mx}=prR(si,ei);
 
+  // 드래그 중엔 간소화 렌더링 (캔들+채널+선만)
+  const isDragging = S.drag && S.dragAxis!==null;
+
   drawGrid(mn,mx);
-  if(S.cfg.vp&&S.vpData.length) drawVP(mn,mx);
+  if(!isDragging && S.cfg.vp&&S.vpData.length) drawVP(mn,mx);
   getChans().filter(ch=>ch.visible).forEach(ch=>drawChannel(ch,si,ei,cw,mn,mx));
   drawLines(si,ei,cw,mn,mx);
   drawCandles(si,ei,cw,mn,mx);
-  drawDivs(si,ei,cw,mn,mx);
+  if(!isDragging) drawDivs(si,ei,cw,mn,mx);
   if(S.drawMode&&S.drawPts.length) drawDPts(si,ei,cw,mn,mx);
   drawAxis(mn,mx);
   drawCurLine(mn,mx);
-  if(S.cfg.rsi) drawRSI(si,ei,cw);
-  // 십자선 캔버스 선 — 매 프레임 클리어 후 다시 그려 잔상 완전 방지
+  if(!isDragging && S.cfg.rsi) drawRSI(si,ei,cw);
   if(CH_STATE.active) _drawCrosshairLines(si,cw,mn,mx);
   updInfo();
 }
@@ -2183,8 +2200,10 @@ cv.addEventListener('mousedown',e=>{
 cv.addEventListener('mouseup',()=>{
   if(S.edit.dragging){ commitEditPt(); return; }
   if(S.drag && S.dragAxis==='y') S.frozenScale=null;
+  const wasDragging = S.drag && S.dragAxis!==null;
   S.drag=false; S.dragAxis=null;
   cv.style.cursor='default';
+  if(wasDragging) draw(true); // 드래그 끝나면 전체 다시 그리기
 });
 
 // PC: 더블클릭 Y축 리셋
@@ -2325,9 +2344,11 @@ cv.addEventListener('touchend',e=>{
   clearTimeout(longPressTimer);
   if(S.edit.dragging){ commitEditPt(); return; }
   if(S.drag && S.dragAxis==='y') S.frozenScale=null;
+  const wasDragging = S.drag && S.dragAxis!==null;
   if(S.drawMode){ S.magnet.active=false; return; }
   if(CH_STATE.active){ hideCrosshair(); return; }
   S.drag=false; S.dragAxis=null;
+  if(wasDragging) draw(true); // 드래그 끝나면 전체 다시 그리기
 });
 
 document.querySelectorAll('.chip.sym').forEach(b=>{
