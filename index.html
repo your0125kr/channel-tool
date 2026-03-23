@@ -7,8 +7,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="채널알림">
 <title>평행채널 + RSI + VP 알림 툴</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap');
 :root{
   --bg:#0a0c10;--panel:#0f1318;--border:#1e2530;
   --accent:#00d4ff;--accent2:#ff6b35;
@@ -60,7 +62,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
 #infopanel{
   position:absolute;right:72px;top:10px;background:rgba(10,12,16,.9);
   border:1px solid var(--border);border-radius:8px;padding:8px 10px;
-  font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8;
+  font-family:Consolas,Menlo,'Courier New',monospace;font-size:11px;line-height:1.8;
   backdrop-filter:blur(8px);display:none;
   cursor:move;user-select:none;z-index:50;
 }
@@ -129,25 +131,28 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
 /* ── CROSSHAIR ── */
 #crosshair-price{
   position:absolute;right:0;background:rgba(255,214,0,.9);color:#000;
-  font-family:'Courier New',monospace;font-size:11px;font-weight:700;
+  font-family:Consolas,Menlo,'Courier New',monospace;font-size:12px;font-weight:700;
   padding:2px 4px;border-radius:3px 0 0 3px;pointer-events:none;
   display:none;white-space:nowrap;z-index:20;
 }
 #crosshair-time{
   position:absolute;bottom:0;background:rgba(255,214,0,.9);color:#000;
-  font-family:'Courier New',monospace;font-size:10px;font-weight:700;
+  font-family:Consolas,Menlo,'Courier New',monospace;font-size:11px;font-weight:700;
   padding:2px 5px;border-radius:3px 3px 0 0;pointer-events:none;
   display:none;white-space:nowrap;z-index:20;transform:translateX(-50%);
 }
 #crosshair-rsi{
   position:absolute;right:0;background:rgba(179,136,255,.9);color:#000;
-  font-family:'Courier New',monospace;font-size:11px;font-weight:700;
+  font-family:Consolas,Menlo,'Courier New',monospace;font-size:12px;font-weight:700;
   padding:2px 4px;border-radius:3px 0 0 3px;pointer-events:none;
   display:none;white-space:nowrap;z-index:20;
 }
 </style>
 </head>
 <body>
+
+<!-- FONT PRELOAD: 캔버스 사용 전 폰트 강제 로드 -->
+<div id="font-preload" style="position:fixed;top:-9999px;left:-9999px;font-family:Consolas,Menlo,'Courier New',monospace;font-weight:400;font-size:11px;opacity:0;pointer-events:none">0123456789</div>
 
 <!-- TOP BAR -->
 <div id="topbar">
@@ -302,9 +307,9 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
     <div class="sdiv"></div>
     <div class="stitle">── 클라우드 동기화 (jsonbin.io) ──</div>
     <div class="srow" style="flex-direction:column;align-items:flex-start;gap:6px">
-      <label style="color:var(--text2);font-size:11px">API Key <span style="color:var(--text2);font-size:10px">(<a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a> 무료 가입 후 발급)</span></label>
+      <label style="color:var(--text2);font-size:12px">API Key <span style="color:var(--text2);font-size:11px">(<a href="https://jsonbin.io" target="_blank" style="color:var(--accent)">jsonbin.io</a> 무료 가입 후 발급)</span></label>
       <input type="password" id="apiKeyInput" placeholder="$2b$10$..." 
-        style="width:100%;background:#1a1f28;border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:11px;font-family:'JetBrains Mono',monospace;outline:none"
+        style="width:100%;background:#1a1f28;border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:12px;font-family:'JetBrains Mono',monospace;outline:none"
         oninput="S.cfg.apiKey=this.value;autoSave()">
     </div>
 
@@ -319,19 +324,19 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
 
     <!-- 업로드 -->
     <div style="margin-bottom:16px">
-      <div style="font-size:11px;color:var(--text2);margin-bottom:8px;font-family:'JetBrains Mono',monospace">▲ PC → 클라우드 업로드</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px;font-family:'JetBrains Mono',monospace">▲ PC → 클라우드 업로드</div>
       <button class="tb" id="btnUpload" onclick="cloudUpload()" style="width:100%;justify-content:center;background:rgba(0,212,255,.1);border-color:var(--accent);color:var(--accent)">
         ☁️ 업로드하기
       </button>
       <div id="uploadResult" style="display:none;margin-top:10px;text-align:center">
-        <div style="font-size:11px;color:var(--text2);margin-bottom:6px">공유 코드 (폰에서 입력하세요)</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:6px">공유 코드 (폰에서 입력하세요)</div>
         <div id="shareCode" style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:var(--yellow);letter-spacing:6px;padding:10px;background:#1a1f28;border-radius:8px;cursor:pointer" onclick="copyCode()" title="클릭하면 복사"></div>
-        <div style="font-size:10px;color:var(--text2);margin-top:6px">👆 클릭하면 클립보드에 복사</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:6px">👆 클릭하면 클립보드에 복사</div>
       </div>
     </div>
 
     <div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:14px">
-      <div style="font-size:11px;color:var(--text2);margin-bottom:8px;font-family:'JetBrains Mono',monospace">▼ 폰 → 코드로 불러오기</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px;font-family:'JetBrains Mono',monospace">▼ 폰 → 코드로 불러오기</div>
       <div style="display:flex;gap:6px">
         <input type="text" id="codeInput" maxlength="100" placeholder="코드 붙여넣기..."
           style="flex:1;background:#1a1f28;border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-size:16px;font-family:'JetBrains Mono',monospace;outline:none;text-align:center;letter-spacing:4px;text-transform:uppercase">
@@ -341,7 +346,7 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
       </div>
     </div>
 
-    <div id="cloudStatus" style="font-size:11px;text-align:center;min-height:16px;font-family:'JetBrains Mono',monospace"></div>
+    <div id="cloudStatus" style="font-size:12px;text-align:center;min-height:16px;font-family:'JetBrains Mono',monospace"></div>
     <button class="tb" style="width:100%;justify-content:center;margin-top:12px" onclick="closeCloud()">닫기</button>
   </div>
 </div>
@@ -1093,7 +1098,7 @@ function drawVP(mn,mx){
     // POC label
     if(b.isPOC){
       ctx.fillStyle='rgba(255,214,0,0.85)';
-      ctx.font='bold 11px Courier New,monospace';
+      ctx.font='bold 12px Consolas,Menlo,"Courier New",monospace';
       ctx.textAlign='right';
       ctx.fillText('POC', RIGHT_EDGE-barW-3, (yTop+yBot)/2+3);
     }
@@ -1177,7 +1182,7 @@ function drawChannel(ch,si,ei,cw,mn,mx){
     // 우측 라벨
     const yl=Y(chAt(ch,ei+ext,lv),mn,mx);
     const lbl=lv===0?'0':lv===1?'1':k;
-    ctx.fillStyle=lineCol; ctx.font='600 10px Courier New,monospace'; ctx.textAlign='left';
+    ctx.fillStyle=lineCol; ctx.font='600 12px Consolas,Menlo,"Courier New",monospace'; ctx.textAlign='left';
     if(lv===0||lv===1){
       ctx.fillText(`${ch.name} ${lbl}`,W-P.r+2,yl+3);
     } else {
@@ -1185,8 +1190,8 @@ function drawChannel(ch,si,ei,cw,mn,mx){
     }
     // 터치 횟수 배지
     const tc=ch.touchCounts[k]||0;
-    if(tc>=4){ ctx.fillStyle='#ff6b35'; ctx.font='bold 10px Courier New,monospace'; ctx.fillText(`⚡${tc}x`,W-P.r+26,yl+3); }
-    else if(tc>0){ ctx.fillStyle='rgba(107,122,144,.8)'; ctx.font='10px Courier New,monospace'; ctx.fillText(`${tc}x`,W-P.r+26,yl+3); }
+    if(tc>=4){ ctx.fillStyle='#ff6b35'; ctx.font='bold 12px Consolas,Menlo,"Courier New",monospace'; ctx.fillText(`⚡${tc}x`,W-P.r+26,yl+3); }
+    else if(tc>0){ ctx.fillStyle='rgba(107,122,144,.8)'; ctx.font='12px Consolas,Menlo,"Courier New",monospace'; ctx.fillText(`${tc}x`,W-P.r+26,yl+3); }
   });
 
   // ── P1 / P2 / P3 편집 핸들 도트 ──
@@ -1210,7 +1215,7 @@ function drawChannel(ch,si,ei,cw,mn,mx){
     ctx.beginPath(); ctx.arc(px,py,R,0,Math.PI*2); ctx.fill();
     // 라벨
     if(isSelected||isHovered){
-      ctx.fillStyle='#fff'; ctx.font='bold 10px Courier New,monospace'; ctx.textAlign='center';
+      ctx.fillStyle='#fff'; ctx.font='bold 12px Consolas,Menlo,"Courier New",monospace'; ctx.textAlign='center';
       ctx.fillText(label, px, py-R-4);
     }
   });
@@ -1260,7 +1265,7 @@ function drawDivs(si,ei,cw,mn,mx){
         }
       });
       // 라벨
-      ctx.font='bold 10px Courier New,monospace'; ctx.fillStyle=col; ctx.textAlign='center';
+      ctx.font='bold 12px Consolas,Menlo,"Courier New",monospace'; ctx.fillStyle=col; ctx.textAlign='center';
       const lbl = isH
         ? (isBull?'H-Div↑':'H-Div↓')
         : (isBull?'Div↑':'Div↓');
@@ -1286,7 +1291,7 @@ function drawRSI(si,ei,cw){
     ctx.strokeStyle=c; ctx.lineWidth=1; ctx.setLineDash(v===50?[3,3]:[]);
     ctx.beginPath(); ctx.moveTo(P.l,RY(v)); ctx.lineTo(W-P.r,RY(v)); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle=c; ctx.font='11px Courier New,monospace'; ctx.textAlign='left';
+    ctx.fillStyle=c; ctx.font='12px Consolas,Menlo,"Courier New",monospace'; ctx.textAlign='left';
     ctx.fillText(String(v),W-P.r+2,RY(v)+3);
   });
   // RSI line
@@ -1328,7 +1333,7 @@ function drawRSI(si,ei,cw){
   const cur=rsi[S.candles.length-1];
   if(cur!=null){
     const c=cur>=OB?'#ff4560':cur<=OS?'#00c896':'#b388ff';
-    ctx.fillStyle=c; ctx.font='bold 11px Courier New,monospace'; ctx.textAlign='left';
+    ctx.fillStyle=c; ctx.font='bold 12px Consolas,Menlo,"Courier New",monospace'; ctx.textAlign='left';
     ctx.fillText(cur.toFixed(1),W-P.r+2,rt+12);
   }
 }
@@ -1407,7 +1412,7 @@ function drawMagnetPreview(si,ei,cw,mn,mx){
   // 가격 라벨
   ctx.fillStyle='rgba(255,214,0,.9)';
   ctx.fillRect(W-P.r,sy-9,P.r,18);
-  ctx.fillStyle='#000'; ctx.font='bold 11px Courier New,monospace'; ctx.textAlign='left';
+  ctx.fillStyle='#000'; ctx.font='bold 12px Consolas,Menlo,"Courier New",monospace'; ctx.textAlign='left';
   ctx.fillText(fp(snap.price),W-P.r+2,sy+4);
 
   // lineMode: 첫 점 찍었으면 미리보기 선 그리기
@@ -1423,7 +1428,7 @@ function drawMagnetPreview(si,ei,cw,mn,mx){
 
 // ── Axis & Price Line ─────────────────────────────────
 function drawAxis(mn,mx){
-  ctx.font='11px Courier New,monospace'; ctx.fillStyle='#6b7a90'; ctx.textAlign='left';
+  ctx.font='12px Consolas,Menlo,"Courier New",monospace'; ctx.fillStyle='#6b7a90'; ctx.textAlign='left';
   for(let i=0;i<=6;i++) ctx.fillText(fp(mn+(1-i/6)*(mx-mn)),W-P.r+2,P.t+i*mainH()/6+3);
 }
 
@@ -1434,7 +1439,7 @@ function drawCurLine(mn,mx){
   ctx.strokeStyle='rgba(255,214,0,.5)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
   ctx.beginPath(); ctx.moveTo(P.l,y); ctx.lineTo(W-P.r,y); ctx.stroke(); ctx.setLineDash([]);
   ctx.fillStyle='#ffd600'; ctx.fillRect(W-P.r,y-8,P.r,16);
-  ctx.fillStyle='#000'; ctx.font='bold 11px Courier New,monospace'; ctx.textAlign='left';
+  ctx.fillStyle='#000'; ctx.font='bold 12px Consolas,Menlo,"Courier New",monospace'; ctx.textAlign='left';
   ctx.fillText(fp(S.curPrice),W-P.r+2,y+3);
 }
 
@@ -1754,7 +1759,7 @@ function drawLines(si,ei,cw,mn,mx){
       ctx.beginPath(); ctx.moveTo(P.l,y); ctx.lineTo(W-P.r,y); ctx.stroke();
       ctx.setLineDash([]);
       // 가격 라벨
-      ctx.fillStyle=col; ctx.font='bold 10px Courier New,monospace'; ctx.textAlign='right';
+      ctx.fillStyle=col; ctx.font='bold 12px Consolas,Menlo,"Courier New",monospace'; ctx.textAlign='right';
       ctx.fillText(fp(line.p1.price), W-P.r-3, y-3);
       // 드래그 핸들
       _drawLinePtDot(X(ptIdx(line.p1),si,cw), y, col, line.id, 'p1');
@@ -2332,7 +2337,7 @@ cv.addEventListener('mousedown',e=>{
     S.edit.ptKey=hit.ptKey; S.edit.dragging=true;
     cv.style.cursor='grabbing'; return;
   }
-  if(S.lineMode){ handleLineClick(cx,cy,false); return; }
+  if(S.lineMode) return; // lineMode는 click 이벤트에서 처리
   // 드래그 시작 (방향 미결정)
   S.drag=true; S.dragAxis=null;
   S.dragX=e.clientX; S.dragY=e.clientY; S.dragOff=S.viewOff;
@@ -2371,11 +2376,11 @@ cv.addEventListener('wheel',e=>{
 // Mobile
 let lastTapTime=0;
 cv.addEventListener('touchstart',e=>{
-  if(S.drawMode&&e.touches.length===1){
+  if((S.drawMode||S.lineMode)&&e.touches.length===1){
     e.preventDefault(); const r=cv.getBoundingClientRect();
     const cx=e.touches[0].clientX-r.left, cy=e.touches[0].clientY-r.top;
     S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=true;
-    draw(); handleClick(cx,cy,true); return;
+    draw(); return; // 탭 완료는 touchend에서 처리
   }
   if(e.touches.length===1){
     const t=e.touches[0];
@@ -2397,8 +2402,7 @@ cv.addEventListener('touchstart',e=>{
       S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=true;
       draw(); return;
     }
-    // 선 작도 탭
-    if(S.lineMode){ e.preventDefault(); handleLineClick(cx,cy,true); return; }
+    // 선 작도는 touchend에서 처리
 
     // 드래그 시작 (방향 미결정)
     S.drag=false; S.dragAxis=null;
@@ -2495,8 +2499,16 @@ cv.addEventListener('touchend',e=>{
   if(S.edit.dragging){ commitEditPt(); return; }
   const wasDragging = S.drag && S.dragAxis!==null;
   const wasYDrag = S.drag && S.dragAxis==='y';
-  if(S.drawMode){ S.magnet.active=false; return; }
-  if(S.lineMode){ S.lineMode=null; S.linePts=[]; S.magnet.active=false; return; }
+
+  // 작도 모드 탭 처리 (touchend에서 좌표 기준으로)
+  if((S.drawMode||S.lineMode) && e.changedTouches.length===1){
+    const r=cv.getBoundingClientRect();
+    const cx=e.changedTouches[0].clientX-r.left;
+    const cy=e.changedTouches[0].clientY-r.top;
+    if(S.drawMode){ handleClick(cx,cy,true); return; }
+    if(S.lineMode){ handleLineClick(cx,cy,true); return; }
+  }
+
   if(CH_STATE.active){ hideCrosshair(); return; }
   S.drag=false; S.dragAxis=null;
   if(wasYDrag) S.frozenScale=null;
@@ -3005,24 +3017,26 @@ setTimeout(()=>{
   if(/iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.matchMedia('(display-mode: standalone)').matches)
     showToast('📱','iPhone 잠금화면 알림 안내','Safari → 공유 → 홈 화면에 추가 후 앱으로 실행하세요','t-touch');
 },2500);
-resize();
-autoLoad();
-updateSyncStatus();
-if(IS_MOBILE) document.getElementById('poll-badge').style.display='inline';
-setTimeout(()=>{ const ak=document.getElementById('apiKeyInput'); if(ak&&S.cfg.apiKey) ak.value=S.cfg.apiKey; },100);
 
-// 패널 드래그 초기화
-setTimeout(()=>{
-  // infopanel: 전체가 드래그 핸들
-  const infopanel=document.getElementById('infopanel');
-  makeDraggable(infopanel, infopanel, 'panel_pos_info');
-  // chpanel: h4 제목줄이 드래그 핸들
-  const chpanel=document.getElementById('chpanel');
-  const chhandle=chpanel.querySelector('h4');
-  makeDraggable(chpanel, chhandle, 'panel_pos_ch');
-},300);
+// 폰트 완전 로드 후 초기화 (IBM Plex Mono 캔버스 적용 보장)
+document.fonts.ready.then(()=>{
+  resize();
+  autoLoad();
+  updateSyncStatus();
+  if(IS_MOBILE) document.getElementById('poll-badge').style.display='inline';
+  setTimeout(()=>{ const ak=document.getElementById('apiKeyInput'); if(ak&&S.cfg.apiKey) ak.value=S.cfg.apiKey; },100);
 
-loadSym();
+  // 패널 드래그 초기화
+  setTimeout(()=>{
+    const infopanel=document.getElementById('infopanel');
+    makeDraggable(infopanel, infopanel, 'panel_pos_info');
+    const chpanel=document.getElementById('chpanel');
+    const chhandle=chpanel.querySelector('h4');
+    makeDraggable(chpanel, chhandle, 'panel_pos_ch');
+  },300);
+
+  loadSym();
+});
 </script>
 </body>
 </html>
