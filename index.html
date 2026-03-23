@@ -73,7 +73,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
 #rsilbl{position:absolute;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--text2);left:8px;pointer-events:none}
 
 /* ── TOASTS ── */
-#toasts{position:fixed;top:72px;right:10px;z-index:200;display:flex;flex-direction:column;gap:5px;max-width:280px;pointer-events:none}
+#toasts{position:fixed;bottom:20px;left:10px;z-index:200;display:flex;flex-direction:column-reverse;gap:5px;max-width:280px;pointer-events:none}
 .toast{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:11px;animation:slideIn .25s ease;display:flex;align-items:flex-start;gap:7px;pointer-events:all}
 .toast.t-touch{border-color:var(--accent)}
 .toast.t-ext{border-color:var(--yellow)}
@@ -84,7 +84,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
 .toast.t-hidden{border-color:var(--purple);background:rgba(179,136,255,.07)}
 .toast.t-hvn{border-color:var(--yellow);background:rgba(255,214,0,.07)}
 .toast.t-poc{border-color:var(--accent2);background:rgba(255,107,53,.1)}
-@keyframes slideIn{from{transform:translateX(110%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes slideIn{from{transform:translateX(-110%);opacity:0}to{transform:translateX(0);opacity:1}}
 .ti{font-size:16px;flex-shrink:0}
 .tb2 .tt{font-weight:700;font-size:12px;margin-bottom:2px}
 .tb2 .ts{font-size:10px;color:var(--text2)}
