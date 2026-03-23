@@ -914,7 +914,14 @@ function visR(){
 }
 
 function prR(si,ei){
-  if(S.frozenScale) return S.frozenScale;
+  if(S.frozenScale){
+    // Y드래그 중: frozenScale 기준으로 yOffset(가격단위) 적용
+    const {mn:fmn, mx:fmx} = S.frozenScale;
+    const mid=(fmn+fmx)/2;
+    const half=(fmx-fmn)/2;
+    const zoomed_half=half/S.yZoom;
+    return{mn:mid-zoomed_half+S.yOffset, mx:mid+zoomed_half+S.yOffset};
+  }
   const sl=S.candles.slice(si,ei);
   if(!sl.length) return{mn:0,mx:1};
   let mn=Infinity,mx=-Infinity;
@@ -924,9 +931,8 @@ function prR(si,ei){
   const mid=(base_mn+base_mx)/2;
   const half=(base_mx-base_mn)/2;
   const zoomed_half=half/S.yZoom;
-  // Y축 오프셋: 범위 제한 없음 → 채널이 아무리 멀어도 이동 가능
-  const shift=zoomed_half*2*S.yOffset; // 화면의 2배 범위까지 이동 가능
-  return{mn:mid-zoomed_half-shift, mx:mid+zoomed_half-shift};
+  // yOffset는 가격 단위
+  return{mn:mid-zoomed_half+S.yOffset, mx:mid+zoomed_half+S.yOffset};
 }
 
 function X(idx,si,cw){return P.l+(idx-si)*cw+cw/2;}
@@ -2141,15 +2147,11 @@ cv.addEventListener('mousemove',e=>{
     if(dx>DRAG_THRESH||dy>DRAG_THRESH){
       S.dragAxis = dx>=dy ? 'x' : 'y';
       if(S.dragAxis==='y'){
-        // Y드래그 시작 시 현재 스케일 고정 (매번 prR 재계산 방지)
+        // Y드래그 시작: 현재 보이는 범위 고정
         const{si,ei}=visR();
-        const sl=S.candles.slice(si,ei);
-        if(sl.length){
-          let mn=Infinity,mx=-Infinity;
-          sl.forEach(c=>{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h);});
-          const pad=(mx-mn)*0.08;
-          S.frozenScale={mn:mn-pad, mx:mx+pad};
-        }
+        const{mn,mx}=prR(si,ei); // 현재 yOffset 포함한 실제 보이는 범위
+        S.frozenScale={mn,mx};
+        S._yDragPricePerPx=(mx-mn)/mainH(); // 픽셀당 가격
         S.yDragOffset=S.yOffset; S.yDragY=e.clientY;
       }
       cv.style.cursor='grabbing';
@@ -2162,9 +2164,10 @@ cv.addEventListener('mousemove',e=>{
     S.viewOff=Math.max(0,Math.min(S.candles.length-10,S.dragOff+Math.round(-(e.clientX-S.dragX)/cw)));
     hideCrosshair(); draw(); return;
   }
-  // Y축 드래그
+  // Y축 드래그 (1:1 픽셀→가격 매핑)
   if(S.drag && S.dragAxis==='y'){
-    S.yOffset=S.yDragOffset-(e.clientY-S.yDragY)/mainH()*2.5;
+    const ppp = S._yDragPricePerPx || 1;
+    S.yOffset = S.yDragOffset + (e.clientY-S.yDragY)*ppp;
     hideCrosshair(); draw(); return;
   }
   // 작도 중 자석 미리보기
@@ -2322,7 +2325,10 @@ cv.addEventListener('touchmove',e=>{
       if(dx>DRAG_THRESH||dy>DRAG_THRESH){
         S.dragAxis=dx>=dy?'x':'y';
         if(S.dragAxis==='y'){
-          const{si,ei}=visR(); S.frozenScale=prR(si,ei);
+          const{si,ei}=visR();
+          const{mn,mx}=prR(si,ei);
+          S.frozenScale={mn,mx};
+          S._yDragPricePerPx=(mx-mn)/mainH();
           S.yDragOffset=S.yOffset; S.yDragY=ty;
         }
       }
@@ -2332,7 +2338,9 @@ cv.addEventListener('touchmove',e=>{
       const{cw}=visR();
       S.viewOff=Math.max(0,Math.min(S.candles.length-10,S.dragOff+Math.round(-(tx-S.dragX)/cw)));
     } else {
-      S.yOffset=S.yDragOffset-(ty-S.yDragY)/mainH()*2.5;
+      // 1:1 픽셀→가격 매핑 (지도 당기기)
+      const ppp = S._yDragPricePerPx || (S.frozenScale?(S.frozenScale.mx-S.frozenScale.mn)/mainH():1);
+      S.yOffset = S.yDragOffset + (ty-S.yDragY)*ppp;
     }
     draw();
   } else if(e.touches.length===2){
