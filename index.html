@@ -376,7 +376,7 @@ const S = {
   alertSilent:false,
   viewOff:0, viewZoom:1,
   yOffset:0, yZoom:1,
-  drag:false, dragX:0, dragOff:0,
+  drag:false, dragX:0, dragY:0, dragOff:0, dragAxis:null, // 드래그 방향 감지
   yDrag:false, yDragY:0, yDragOffset:0,
   yPinchD:0, yPinchZoom:1,
   pinchD:0, pinchZ:1,
@@ -2104,33 +2104,42 @@ cv.addEventListener('click',e=>{
 
 // ── Y축 이동/줌 헬퍼 ──────────────────────────────────
 function isOnYAxis(cx){ return cx >= W - P.r - 10; }
+function resetYAxis(){ S.yOffset=0; S.yZoom=1; draw(); }
 
-function resetYAxis(){
-  S.yOffset=0; S.yZoom=1; draw();
-}
+// ── 드래그 방향 감지 상태 ──────────────────────────────
+// dragAxis: null=미결정, 'x'=X축모드, 'y'=Y축모드
+const DRAG_THRESH = 6; // px — 방향 결정 임계값
 
-// PC: mousemove = live crosshair + 작도 중 magnet 미리보기 + 편집 드래그
+// PC: mousemove
 cv.addEventListener('mousemove',e=>{
   const r=cv.getBoundingClientRect();
   const cx=e.clientX-r.left, cy=e.clientY-r.top;
 
-  // Y축 드래그
-  if(S.yDrag){
-    const dy=cy - S.yDragY;
-    const{si,ei}=visR();
-    const{mn,mx}=prR(si,ei); // frozenScale 활성 상태로 호출
-    const range=mx-mn;
-    S.yOffset = S.yDragOffset + dy / mainH() * 1.5; // 감도 1.5배
-    draw(); return;
+  // 편집 드래그
+  if(S.edit.dragging){ updateEditPt(cx,cy,false); return; }
+
+  // 방향 미결정 상태에서 드래그 중
+  if(S.drag && S.dragAxis===null){
+    const dx=Math.abs(e.clientX-S.dragX), dy=Math.abs(e.clientY-S.dragY);
+    if(dx>DRAG_THRESH||dy>DRAG_THRESH){
+      S.dragAxis = dx>=dy ? 'x' : 'y';
+      if(S.dragAxis==='y'){
+        const{si,ei}=visR(); S.frozenScale=prR(si,ei);
+        S.yDragOffset=S.yOffset; S.yDragY=e.clientY;
+      }
+      cv.style.cursor='grabbing';
+    }
+    return;
   }
-  // 편집 드래그 중
-  if(S.edit.dragging){
-    updateEditPt(cx,cy,false); return;
-  }
-  // 일반 스크롤 드래그
-  if(S.drag&&!S.drawMode){
+  // X축 드래그
+  if(S.drag && S.dragAxis==='x'){
     const{cw}=visR();
     S.viewOff=Math.max(0,Math.min(S.candles.length-10,S.dragOff+Math.round(-(e.clientX-S.dragX)/cw)));
+    hideCrosshair(); draw(); return;
+  }
+  // Y축 드래그
+  if(S.drag && S.dragAxis==='y'){
+    S.yOffset=S.yDragOffset+(e.clientY-S.yDragY)/mainH()*1.5;
     hideCrosshair(); draw(); return;
   }
   // 작도 중 자석 미리보기
@@ -2138,20 +2147,17 @@ cv.addEventListener('mousemove',e=>{
     S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=false;
     draw(); return;
   }
-  // Y축 위에서는 커서 변경
-  if(isOnYAxis(cx)){ cv.style.cursor='ns-resize'; CH_STATE.active=false; return; }
-  // 채널 점 호버 감지
+  // 채널 점 호버
   const hit=findNearestPt(cx,cy,false);
-  const prevHover=S.hover; S.hover=hit;
+  S.hover=hit;
   cv.style.cursor=hit?'grab':'default';
-  // 십자선
   CH_STATE.active=true; CH_STATE.x=cx; CH_STATE.y=cy;
-  draw();
-  _updateCrosshairDOM(cx,cy);
+  draw(); _updateCrosshairDOM(cx,cy);
 });
 
 cv.addEventListener('mouseleave',()=>{
-  S.drag=false; S.yDrag=false; S.hover=null; S.magnet.active=false;
+  S.drag=false; S.dragAxis=null; S.frozenScale=null;
+  S.hover=null; S.magnet.active=false;
   hideCrosshair(); if(S.edit.dragging) commitEditPt();
 });
 
@@ -2159,14 +2165,6 @@ cv.addEventListener('mousedown',e=>{
   if(S.drawMode) return;
   const r=cv.getBoundingClientRect();
   const cx=e.clientX-r.left, cy=e.clientY-r.top;
-
-  // Y축 드래그 시작
-  if(isOnYAxis(cx)){
-    S.yDrag=true; S.yDragY=cy; S.yDragOffset=S.yOffset;
-    // Y축 드래그 중 frozenScale 설정
-    const{si,ei}=visR(); S.frozenScale=prR(si,ei);
-    cv.style.cursor='ns-resize'; return;
-  }
   const hit=findNearestPt(cx,cy,false);
   if(hit){
     const{si,ei}=visR(); S.frozenScale=prR(si,ei);
@@ -2175,102 +2173,93 @@ cv.addEventListener('mousedown',e=>{
     S.edit.ptKey=hit.ptKey; S.edit.dragging=true;
     cv.style.cursor='grabbing'; return;
   }
-  // 선 작도 모드 클릭
   if(S.lineMode){ handleLineClick(cx,cy,false); return; }
-  S.drag=true; S.dragX=e.clientX; S.dragOff=S.viewOff;
+  // 드래그 시작 (방향 미결정)
+  S.drag=true; S.dragAxis=null;
+  S.dragX=e.clientX; S.dragY=e.clientY; S.dragOff=S.viewOff;
+  cv.style.cursor='grab';
 });
 
 cv.addEventListener('mouseup',()=>{
-  if(S.yDrag){ S.yDrag=false; S.frozenScale=null; draw(); return; }
   if(S.edit.dragging){ commitEditPt(); return; }
-  S.drag=false;
+  if(S.drag && S.dragAxis==='y') S.frozenScale=null;
+  S.drag=false; S.dragAxis=null;
+  cv.style.cursor='default';
 });
 
-// PC: 더블클릭으로 Y축 리셋
+// PC: 더블클릭 Y축 리셋
 cv.addEventListener('dblclick',e=>{
   const r=cv.getBoundingClientRect();
-  const cx=e.clientX-r.left;
-  if(isOnYAxis(cx)){ resetYAxis(); return; }
+  if(isOnYAxis(e.clientX-r.left)){ resetYAxis(); }
 });
 
-// PC: 가격축에서 휠 → Y축 줌
+// PC: 휠
 cv.addEventListener('wheel',e=>{
   e.preventDefault();
   const r=cv.getBoundingClientRect();
   const cx=e.clientX-r.left;
   if(isOnYAxis(cx)){
-    // Y축 줌
     S.yZoom=e.deltaY<0?Math.min(5,S.yZoom*1.1):Math.max(0.3,S.yZoom/1.1);
-    draw(); return;
+  } else {
+    S.viewZoom=e.deltaY<0?Math.min(3,S.viewZoom*1.1):Math.max(0.3,S.viewZoom/1.1);
   }
-  // X축 줌 (기존)
-  S.viewZoom=e.deltaY<0?Math.min(3,S.viewZoom*1.1):Math.max(0.3,S.viewZoom/1.1);
   draw();
 },{passive:false});
 
-// Mobile: long press = crosshair, draw mode = tap to place with magnet, tap on dot = edit
+// Mobile
 let lastTapTime=0;
 cv.addEventListener('touchstart',e=>{
   if(S.drawMode&&e.touches.length===1){
-    e.preventDefault();const r=cv.getBoundingClientRect();
+    e.preventDefault(); const r=cv.getBoundingClientRect();
     const cx=e.touches[0].clientX-r.left, cy=e.touches[0].clientY-r.top;
     S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=true;
-    draw();
-    handleClick(cx, cy, true); return;
+    draw(); handleClick(cx,cy,true); return;
   }
   if(e.touches.length===1){
     const t=e.touches[0];
     const r=cv.getBoundingClientRect();
     const cx=t.clientX-r.left, cy=t.clientY-r.top;
 
-    // 더블탭 → Y축 리셋
+    // 더블탭 → Y축 리셋 (차트 어디서나)
     const now=Date.now();
-    if(now-lastTapTime<300 && isOnYAxis(cx)){ resetYAxis(); lastTapTime=0; return; }
+    if(now-lastTapTime<300){ resetYAxis(); lastTapTime=0; return; }
     lastTapTime=now;
 
-    // Y축 영역 터치 → Y 드래그
-    if(isOnYAxis(cx)){
-      e.preventDefault();
-      S.yDrag=true; S.yDragY=cy; S.yDragOffset=S.yOffset;
-      const{si,ei}=visR(); S.frozenScale=prR(si,ei);
-      return;
-    }
-
-    // 채널/선 점 근처 탭 → 편집 시작
+    // 채널/선 점 편집
     const hit=findNearestPt(cx,cy,true);
     if(hit){
       e.preventDefault();
       const{si,ei}=visR(); S.frozenScale=prR(si,ei);
-      S.edit.chId=hit.chId||null;
-      S.edit.lineId=hit.lineId||null;
+      S.edit.chId=hit.chId||null; S.edit.lineId=hit.lineId||null;
       S.edit.ptKey=hit.ptKey; S.edit.dragging=true;
       S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=true;
       draw(); return;
     }
-    // 선 작도 모드 탭
+    // 선 작도 탭
     if(S.lineMode){ e.preventDefault(); handleLineClick(cx,cy,true); return; }
 
-    S.drag=false;
+    // 드래그 시작 (방향 미결정)
+    S.drag=false; S.dragAxis=null;
     longPressTimer=setTimeout(()=>{
-      CH_STATE.active=true;
-      CH_STATE.x=t.clientX-r.left; CH_STATE.y=t.clientY-r.top;
-      S.drag=false;
-      draw();
+      if(!S.drag && !S.edit.dragging){
+        CH_STATE.active=true;
+        CH_STATE.x=t.clientX-r.left; CH_STATE.y=t.clientY-r.top;
+        draw();
+      }
     },500);
-    S.dragX=t.clientX; S.dragOff=S.viewOff;
-    setTimeout(()=>{ if(!CH_STATE.active&&!S.edit.dragging) S.drag=true; },50);
+    S.dragX=t.clientX; S.dragY=t.clientY; S.dragOff=S.viewOff;
+    setTimeout(()=>{ if(!CH_STATE.active&&!S.edit.dragging){ S.drag=true; } },50);
   } else if(e.touches.length===2){
     clearTimeout(longPressTimer);
-    S.drag=false; S.yDrag=false;
+    S.drag=false; S.dragAxis=null; S.frozenScale=null;
+    S.pinchD=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    S.pinchZ=S.viewZoom;
+    // Y축 핀치: 두 손가락 모두 우측
     const r=cv.getBoundingClientRect();
     const cx0=e.touches[0].clientX-r.left, cx1=e.touches[1].clientX-r.left;
-    // 두 손가락이 모두 Y축 위 → Y축 핀치줌
     if(isOnYAxis(cx0)&&isOnYAxis(cx1)){
       S.yPinchD=Math.abs(e.touches[0].clientY-e.touches[1].clientY);
       S.yPinchZoom=S.yZoom;
-    } else {
-      S.pinchD=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
-      S.pinchZ=S.viewZoom;
     }
   }
 },{passive:false});
@@ -2279,41 +2268,49 @@ cv.addEventListener('touchmove',e=>{
   e.preventDefault();
   clearTimeout(longPressTimer);
 
-  // Y축 드래그
-  if(S.yDrag&&e.touches.length===1){
-    const r=cv.getBoundingClientRect();
-    const cy=e.touches[0].clientY-r.top;
-    S.yOffset=S.yDragOffset+(cy-S.yDragY)/mainH()*1.5;
-    draw(); return;
-  }
   // 편집 드래그
   if(S.edit.dragging&&e.touches.length===1){
     const r=cv.getBoundingClientRect();
-    updateEditPt(e.touches[0].clientX-r.left, e.touches[0].clientY-r.top, true);
-    return;
+    updateEditPt(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top,true); return;
   }
   if(S.drawMode&&e.touches.length===1){
     const r=cv.getBoundingClientRect();
     S.magnet.active=true;
     S.magnet.cx=e.touches[0].clientX-r.left;
     S.magnet.cy=e.touches[0].clientY-r.top;
-    S.magnet.isMobile=true;
-    draw(); return;
+    S.magnet.isMobile=true; draw(); return;
   }
   if(CH_STATE.active&&e.touches.length===1){
     const r=cv.getBoundingClientRect();
     CH_STATE.x=e.touches[0].clientX-r.left;
     CH_STATE.y=e.touches[0].clientY-r.top;
-    draw(); _updateCrosshairDOM(CH_STATE.x,CH_STATE.y);
-  } else if(e.touches.length===1&&S.drag){
-    const{cw}=visR();
-    S.viewOff=Math.max(0,Math.min(S.candles.length-10,S.dragOff+Math.round(-(e.touches[0].clientX-S.dragX)/cw)));
+    draw(); _updateCrosshairDOM(CH_STATE.x,CH_STATE.y); return;
+  }
+  if(e.touches.length===1&&S.drag){
+    const tx=e.touches[0].clientX, ty=e.touches[0].clientY;
+    // 방향 미결정 → 감지
+    if(S.dragAxis===null){
+      const dx=Math.abs(tx-S.dragX), dy=Math.abs(ty-S.dragY);
+      if(dx>DRAG_THRESH||dy>DRAG_THRESH){
+        S.dragAxis=dx>=dy?'x':'y';
+        if(S.dragAxis==='y'){
+          const{si,ei}=visR(); S.frozenScale=prR(si,ei);
+          S.yDragOffset=S.yOffset; S.yDragY=ty;
+        }
+      }
+      return;
+    }
+    if(S.dragAxis==='x'){
+      const{cw}=visR();
+      S.viewOff=Math.max(0,Math.min(S.candles.length-10,S.dragOff+Math.round(-(tx-S.dragX)/cw)));
+    } else {
+      S.yOffset=S.yDragOffset+(ty-S.yDragY)/mainH()*1.5;
+    }
     draw();
   } else if(e.touches.length===2){
     const r=cv.getBoundingClientRect();
     const cx0=e.touches[0].clientX-r.left, cx1=e.touches[1].clientX-r.left;
     if(isOnYAxis(cx0)&&isOnYAxis(cx1)){
-      // Y축 핀치줌
       const d=Math.abs(e.touches[0].clientY-e.touches[1].clientY);
       S.yZoom=Math.max(0.3,Math.min(5,S.yPinchZoom*(d/(S.yPinchD||1))));
     } else {
@@ -2326,11 +2323,11 @@ cv.addEventListener('touchmove',e=>{
 
 cv.addEventListener('touchend',e=>{
   clearTimeout(longPressTimer);
-  if(S.yDrag){ S.yDrag=false; S.frozenScale=null; draw(); return; }
   if(S.edit.dragging){ commitEditPt(); return; }
+  if(S.drag && S.dragAxis==='y') S.frozenScale=null;
   if(S.drawMode){ S.magnet.active=false; return; }
   if(CH_STATE.active){ hideCrosshair(); return; }
-  S.drag=false;
+  S.drag=false; S.dragAxis=null;
 });
 
 document.querySelectorAll('.chip.sym').forEach(b=>{
