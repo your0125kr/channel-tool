@@ -160,6 +160,7 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
     <button class="chip tf active" data-tf="15m">15m</button>
     <button class="chip tf" data-tf="30m">30m</button>
     <button class="chip tf" data-tf="1h">1h</button>
+    <button class="chip tf" data-tf="4h">4h</button>
     <button class="chip tf" data-tf="1d">1d</button>
     <button class="chip tf" data-tf="1w">1w</button>
   </div>
@@ -248,7 +249,7 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
     <div class="sdiv"></div>
     <div class="stitle">── RSI 다이버전스 ──</div>
     <div class="srow"><label>정규 다이버전스 알림</label><button class="tog on" id="tg-rdiv" onclick="togS(this,'rdiv')"></button></div>
-    <div class="srow"><label>히든 다이버전스 (참고 표시만)</label><button class="tog off" id="tg-hdiv" onclick="togS(this,'hdiv');draw()"></button></div>
+    <div class="srow"><label>히든 다이버전스 알림</label><button class="tog on" id="tg-hdiv" onclick="togS(this,'hdiv');draw()"></button></div>
     <div class="srow"><label>RSI 패널 표시</label><button class="tog on" id="tg-rsi" onclick="togS(this,'rsi');draw()"></button></div>
     <div class="srow">
       <label>RSI 과매수 기준 (OB)</label>
@@ -372,7 +373,7 @@ const S = {
   frozenScale:null,
   cfg:{
     touch:true, ext:true, '4th':true,
-    rdiv:true, hdiv:false, rsi:true,
+    rdiv:true, hdiv:true, rsi:true,
     rsiOB:70, rsiOS:30, pivotGap:5,
     vp:true, vpAlert:true, vpProx:0.4,
     sound:true, proximity:0.5, confirmProx:1.0,
@@ -425,13 +426,13 @@ function rsiTop(){ return P.t+mainH()+RSI_GAP; }
 // ═══════════════════════════════════════════════════════
 
 // Bybit TF 매핑 (Bybit interval 단위)
-const BYBIT_TF = {'15m':'15','30m':'30','1h':'60','1d':'D','1w':'W'};
+const BYBIT_TF = {'15m':'15','30m':'30','1h':'60','4h':'240','1d':'D','1w':'W'};
 const BYBIT_BASE = 'https://api.bybit.com';
 
 // Bybit 캔들 → 내부 포맷 변환
 // Bybit 응답: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
 function parseBybitCandle(x){
-  return {t:+x[0], o:+x[1], h:+x[2], l:+x[3], c:+x[4], v:+x[5]};
+  return {t:+x[0], o:+x[1], h:+x[2], l:+x[3], c:+x[4], v:+x[5], confirmed:false};
 }
 
 // 캔들 캐시 키 (심볼+TF별 분리)
@@ -524,12 +525,18 @@ function connectWS(){
         // 최신 캔들 (index 0)
         const c = parseBybitCandle(list[0]);
         const prev = S.candles[S.candles.length-1];
+        // 새 캔들 시작 = 이전 캔들 종가 마감
+        const confirmed = !!(prev && prev.t !== c.t);
         if(prev&&prev.t===c.t) S.candles[S.candles.length-1]=c;
-        else{ S.candles.push(c); if(S.candles.length>500)S.candles.shift(); }
+        else{
+          // 이전 캔들 confirmed 표시
+          if(prev) prev.confirmed=true;
+          S.candles.push(c); if(S.candles.length>500)S.candles.shift();
+        }
         S.curPrice=c.c;
         document.getElementById('cprice').textContent=fp(c.c);
         calcRSI(); calcVP(); findDivs();
-        checkAllChAlerts(c.c);
+        checkAllChAlerts(c.c, confirmed);
         checkVPAlerts(c.c);
         draw();
       }catch(e){ console.error('polling error',e); }
@@ -547,20 +554,23 @@ function connectWS(){
     }));
   };
   S.ws.onmessage = e=>{
-    const msg = JSON.parse(e.data);
-    if(msg.topic && msg.data && msg.data.length){
-      const k = msg.data[0];
-      const c = {t:k.start, o:+k.open, h:+k.high, l:+k.low, c:+k.close, v:+k.volume};
-      const last = S.candles[S.candles.length-1];
-      if(last&&last.t===c.t) S.candles[S.candles.length-1]=c;
-      else{ S.candles.push(c); if(S.candles.length>500)S.candles.shift(); }
-      S.curPrice=c.c;
-      document.getElementById('cprice').textContent=fp(c.c);
-      calcRSI(); calcVP(); findDivs();
-      checkAllChAlerts(c.c);
-      checkVPAlerts(c.c);
-      draw();
-    }
+    try{
+      const msg = JSON.parse(e.data);
+      if(msg.topic && msg.data && msg.data.length){
+        const k = msg.data[0];
+        const confirmed = !!k.confirm; // 캔들 종가 마감 여부
+        const c = {t:k.start, o:+k.open, h:+k.high, l:+k.low, c:+k.close, v:+k.volume, confirmed};
+        const last = S.candles[S.candles.length-1];
+        if(last&&last.t===c.t) S.candles[S.candles.length-1]=c;
+        else{ S.candles.push(c); if(S.candles.length>500)S.candles.shift(); }
+        S.curPrice=c.c;
+        document.getElementById('cprice').textContent=fp(c.c);
+        calcRSI(); calcVP(); findDivs();
+        checkAllChAlerts(c.c, confirmed);
+        checkVPAlerts(c.c);
+        draw();
+      }
+    }catch(e){ console.error('WS parse error',e); }
   };
   S.ws.onclose = ()=>setTimeout(connectWS, 3000);
 }
@@ -789,33 +799,58 @@ function findDivs(silent=false){
 }
 
 function checkDivAlerts(silent=false){
-  // TF별로 분리된 lastDivKey 사용
   if(!S.lastDivKey[S.tf]) S.lastDivKey[S.tf]={};
   const tfKeys = S.lastDivKey[S.tf];
+  const n = S.candles.length;
+  const RECENT = 3; // 최근 N캔들 이내에서 완성된 신호만 알림
 
+  // 정규 + 히든 합쳐서 처리
   [...S.divs,...S.hdivs].forEach(d=>{
-    const key=`${d.type}_${d.i1}_${d.i2}`;
-    if(tfKeys[key]) return;
-    tfKeys[key]=true;
-    // 초기 로딩/TF 전환 시(silent=true)엔 등록만 하고 알림 없음
-    if(silent) return;
-    const isH=d.type.startsWith('h');
-    const isBull=d.type.includes('bull');
-    const emoji=isBull?'🔼':'🔽';
-    const kind=isH?'히든':'정규';
-    const dir=isBull?'상승':'하락';
-    const title=`[${S.tf}] ${kind} ${dir} 다이버전스`;
-    const sub=`RSI ${d.r1.toFixed(1)}→${d.r2.toFixed(1)} | ${fp(d.p1)}→${fp(d.p2)}`;
-    const cls=isH?'t-hidden':isBull?'t-bull':'t-bear';
-    if(!isH&&S.cfg.rdiv){
-      showToast(emoji,title,sub,cls);
-      sendNotif(title,sub);
-      playSound(isBull?'bull':'bear');
-      addLog(`${emoji} ${title} | ${sub}`,cls);
-    } else if(isH&&S.cfg.hdiv){
-      showToast('〰️',title+' (참고)',sub,'t-hidden');
-      addLog(`〰️ ${title} | ${sub}`,'t-hidden');
+    const isH = d.type.startsWith('h');
+    const isBull = d.type.includes('bull');
+    const dir = isBull ? 'bull' : 'bear';
+
+    // 최신 신호만 알림 — i2가 현재 캔들에서 RECENT 이내
+    const isRecent = (n - 1 - d.i2) <= RECENT;
+    if(!isRecent){
+      // 오래된 신호는 등록만 (알림 없이)
+      const key = `${d.type}_${d.i1}_${d.i2}`;
+      tfKeys[key] = true;
+      return;
     }
+
+    // 같은 방향의 기존 신호보다 더 큰지 확인 (업그레이드 감지)
+    const existingKey = tfKeys[`active_${dir}`];
+    const key = `${d.type}_${d.i1}_${d.i2}`;
+
+    if(tfKeys[key]) return; // 이미 알림 보낸 신호
+    tfKeys[key] = true;
+    if(silent) return;
+
+    // 업그레이드 여부: 기존 신호보다 i1이 더 이전이면 더 큰 다이버전스
+    const isUpgrade = existingKey && existingKey !== key &&
+      (() => {
+        const [,prevI1] = existingKey.split('_').map(Number);
+        return d.i1 < prevI1;
+      })();
+    tfKeys[`active_${dir}`] = key;
+
+    // 알림 설정 확인
+    if(!isH && !S.cfg.rdiv) return;
+    if(isH && !S.cfg.hdiv) return;
+
+    const prefix = isH ? 'H-Div' : 'Div';
+    const arrow  = isBull ? '↑' : '↓';
+    const emoji  = isBull ? '🔼' : '🔽';
+    const upgradeTag = isUpgrade ? ' 📈 신호 강화!' : '';
+    const title = `[${S.tf}] ${prefix}${arrow}${upgradeTag}`;
+    const sub   = `RSI ${d.r1.toFixed(1)}→${d.r2.toFixed(1)} | ${fp(d.p1)}→${fp(d.p2)}`;
+    const cls   = isH ? (isBull?'t-bull':'t-bear') : (isBull?'t-bull':'t-bear');
+
+    showToast(emoji, title, sub, cls);
+    sendNotif(title, sub);
+    playSound(isBull?'bull':'bear');
+    addLog(`${emoji} ${title} | ${sub}`, cls);
   });
 }
 
@@ -1065,22 +1100,40 @@ function drawDivs(si,ei,cw,mn,mx){
     arr.forEach(d=>{
       if(d.i2<si||d.i1>ei) return;
       const isBull=d.type.includes('bull');
-      const col=isH?'rgba(179,136,255,.75)':(isBull?'rgba(0,230,118,.85)':'rgba(255,61,87,.85)');
-      const x1=X(d.i1,si,cw),x2=X(d.i2,si,cw);
-      const y1=Y(d.p1,mn,mx),y2=Y(d.p2,mn,mx);
-      ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=1.5;
-      if(isH) ctx.setLineDash([3,3]);
+      // 정규: 실선, 초록/빨강 / 히든: 점선, 하늘색/보라
+      const col = isH
+        ? (isBull?'rgba(0,212,255,.85)':'rgba(179,136,255,.85)')
+        : (isBull?'rgba(0,230,118,.9)':'rgba(255,61,87,.9)');
+      const x1=X(d.i1,si,cw), x2=X(d.i2,si,cw);
+      const y1=Y(d.p1,mn,mx), y2=Y(d.p2,mn,mx);
+      ctx.save();
+      ctx.strokeStyle=col; ctx.lineWidth=2;
+      if(isH) ctx.setLineDash([4,3]);
       ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
       ctx.setLineDash([]);
-      [x1,x2].forEach((x,i)=>{ctx.fillStyle=col;ctx.beginPath();ctx.arc(x,[y1,y2][i],3,0,Math.PI*2);ctx.fill();});
-      ctx.font='bold 11px Courier New,monospace'; ctx.fillStyle=col; ctx.textAlign='center';
-      const lbl=isH?(isBull?'hBull':'hBear'):(isBull?'🔼Bull':'🔽Bear');
-      ctx.fillText(lbl,x2,isBull?y2+15:y2-7);
+      // 끝점: 정규=원형, 히든=다이아몬드
+      [[x1,y1],[x2,y2]].forEach(([x,y])=>{
+        ctx.fillStyle=col;
+        if(isH){
+          // 다이아몬드
+          ctx.beginPath();
+          ctx.moveTo(x,y-5); ctx.lineTo(x+4,y); ctx.lineTo(x,y+5); ctx.lineTo(x-4,y);
+          ctx.closePath(); ctx.fill();
+        } else {
+          ctx.beginPath(); ctx.arc(x,y,3.5,0,Math.PI*2); ctx.fill();
+        }
+      });
+      // 라벨
+      ctx.font='bold 10px Courier New,monospace'; ctx.fillStyle=col; ctx.textAlign='center';
+      const lbl = isH
+        ? (isBull?'H-Div↑':'H-Div↓')
+        : (isBull?'Div↑':'Div↓');
+      ctx.fillText(lbl, x2, isBull?y2+15:y2-7);
       ctx.restore();
     });
   };
-  drawSet(S.divs,false);
-  if(S.cfg.hdiv) drawSet(S.hdivs,true);
+  drawSet(S.divs, false);
+  if(S.cfg.hdiv) drawSet(S.hdivs, true);
 }
 
 // ── RSI ───────────────────────────────────────────────
@@ -1114,14 +1167,22 @@ function drawRSI(si,ei,cw){
     arr.forEach(d=>{
       if(d.i2<si||d.i1>ei||!rsi[d.i1]||!rsi[d.i2]) return;
       const isBull=d.type.includes('bull');
-      const col=isH?'rgba(179,136,255,.6)':(isBull?'rgba(0,230,118,.8)':'rgba(255,61,87,.8)');
-      ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=1.5;
-      if(isH) ctx.setLineDash([3,3]);
+      const col = isH
+        ? (isBull?'rgba(0,212,255,.7)':'rgba(179,136,255,.7)')
+        : (isBull?'rgba(0,230,118,.85)':'rgba(255,61,87,.85)');
+      ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=2;
+      if(isH) ctx.setLineDash([4,3]);
       ctx.beginPath(); ctx.moveTo(X(d.i1,si,cw),RY(d.r1)); ctx.lineTo(X(d.i2,si,cw),RY(d.r2)); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle=col;
-      ctx.beginPath(); ctx.arc(X(d.i1,si,cw),RY(d.r1),3,0,Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(X(d.i2,si,cw),RY(d.r2),3,0,Math.PI*2); ctx.fill();
+      [[d.i1,d.r1],[d.i2,d.r2]].forEach(([i,r])=>{
+        const x=X(i,si,cw), y=RY(r);
+        if(isH){
+          ctx.beginPath(); ctx.moveTo(x,y-4); ctx.lineTo(x+3,y); ctx.lineTo(x,y+4); ctx.lineTo(x-3,y); ctx.closePath(); ctx.fill();
+        } else {
+          ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
+        }
+      });
       ctx.restore();
     });
   };
@@ -1260,17 +1321,14 @@ function chNow(ch){
   return out;
 }
 
-function checkAllChAlerts(price){
+function checkAllChAlerts(price, confirmed=false){
   if(S.alertSilent){
-    // 첫 틱: 알림 없이 모든 채널 상태만 조용히 설정
+    const prox = S.cfg.proximity/100;
     getChans().filter(ch=>ch.visible).forEach(ch=>{
       ch._lastPrice = price;
       ch.zoneState  = null;
       ch.nearState  = null;
-      // 현재 가격이 어느 구간에 있는지 상태만 설정
-      const prox = S.cfg.proximity/100;
-      const lvs  = chNow(ch);
-      // 근접 구간 감지 (상태만, 알림 없음)
+      const lvs = chNow(ch);
       let nearZone=null, bd=Infinity;
       Object.entries(lvs).forEach(([k,lp])=>{
         const d=Math.abs(price-lp)/lp;
@@ -1286,20 +1344,19 @@ function checkAllChAlerts(price){
         ch.zoneState='BREAK_LOW';
       }
     });
-    S.alertSilent=false; // 다음 틱부터 정상 알림
+    S.alertSilent=false;
     return;
   }
-  getChans().filter(ch=>ch.visible).forEach(ch=>checkChAlerts(ch,price,S.tf));
+  getChans().filter(ch=>ch.visible).forEach(ch=>checkChAlerts(ch, price, S.tf, confirmed));
 }
 
 function getLvName(lv){
   return lv===0?'기준선(0)':lv===1?'평행선(1)':lv===-1?'확장 하단(-1)':lv===2?'확장 상단(2)':`레벨 ${lv}`;
 }
 
-function checkChAlerts(ch, price, alertTf=S.tf){
+function checkChAlerts(ch, price, alertTf=S.tf, confirmed=false){
   if(!S.cfg.touch) return;
   const isCurrentTF = (alertTf === S.tf);
-  // 전역 silent 플래그 — TF 전환 직후 첫 틱은 상태만 설정, 알림 없음
   if(S.alertSilent){
     ch._lastPrice=price; ch.zoneState=null; ch.nearState=null;
     return;
@@ -1313,7 +1370,8 @@ function checkChAlerts(ch, price, alertTf=S.tf){
   if(lvs['2'] && price > lvs['2']*(1+prox)){
     if(ch.zoneState!=='BREAK_HIGH'){
       ch.zoneState='BREAK_HIGH'; ch.nearState=null;
-      fireBreak(ch,'BREAK_HIGH',price,alertTf);
+      // 돌파/이탈은 종가 마감 시에만 알림
+      if(confirmed) fireBreak(ch,'BREAK_HIGH',price,alertTf);
       if(isCurrentTF) draw();
     }
     return;
@@ -1321,7 +1379,7 @@ function checkChAlerts(ch, price, alertTf=S.tf){
   if(lvs['-1'] && price < lvs['-1']*(1-prox)){
     if(ch.zoneState!=='BREAK_LOW'){
       ch.zoneState='BREAK_LOW'; ch.nearState=null;
-      fireBreak(ch,'BREAK_LOW',price,alertTf);
+      if(confirmed) fireBreak(ch,'BREAK_LOW',price,alertTf);
       if(isCurrentTF) draw();
     }
     return;
@@ -1342,19 +1400,22 @@ function checkChAlerts(ch, price, alertTf=S.tf){
       ch.nearState = { zk:nearZone, isFromAbove, lp };
       ch.zoneState = nearZone;
       ch.touchCounts[nearZone] = (ch.touchCounts[nearZone]||0)+1;
+      // 근접 알림은 실시간 (confirmed 무관)
       fireNear(ch, nearZone, price, lp, isFromAbove, ch.touchCounts[nearZone], alertTf);
       if(isCurrentTF) draw();
     }
   } else {
     if(ch.nearState){
       const {zk, isFromAbove, lp} = ch.nearState;
-      // 이탈 판단은 confirmProx(확인 임계값) 기준 — 진입보다 더 벗어나야 확인
       const cprox = S.cfg.confirmProx/100;
       const escaped_up   = price > lp * (1+cprox);
       const escaped_down = price < lp * (1-cprox);
       if(escaped_up || escaped_down){
         const brokeThrough = isFromAbove ? escaped_down : escaped_up;
-        fireConfirm(ch, zk, price, lp, brokeThrough?'break':'confirm', isFromAbove, alertTf);
+        // 지지/저항/돌파 확인은 종가 마감 시에만 알림
+        if(confirmed){
+          fireConfirm(ch, zk, price, lp, brokeThrough?'break':'confirm', isFromAbove, alertTf);
+        }
         ch.nearState = null;
         ch.zoneState = null;
         if(isCurrentTF) draw();
