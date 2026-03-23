@@ -170,6 +170,9 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
 <!-- TOOLBAR -->
 <div id="toolbar">
   <button class="tb" id="btnDraw" onclick="startDraw()">✏️ 채널 작도</button>
+  <button class="tb" id="btnTrend" onclick="startLineDraw('trend')">📈 추세선</button>
+  <button class="tb" id="btnHline" onclick="startLineDraw('hline')">➖ 수평선</button>
+  <button class="tb" id="btnLock" onclick="toggleLock()" title="작도 잠금">🔓 잠금해제</button>
   <button class="tb" id="btnChList" onclick="toggleChPanel()">📂 채널목록 <span id="chcount" style="color:var(--accent);font-family:'JetBrains Mono',monospace">0</span></button>
   <button class="tb" onclick="openSettings()">⚙️ 알림설정</button>
   <button class="tb" onclick="toggleLog()">📋 알림기록</button>
@@ -245,6 +248,11 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
       <input type="range" min="0.2" max="3" step="0.1" value="1.0" oninput="updCfg('confirmProx',parseFloat(this.value),this,'cprox-v','%')">
       <span class="sval" id="cprox-v">1.0%</span>
     </div>
+
+    <div class="sdiv"></div>
+    <div class="stitle">── 추세선 / 수평선 알림 ──</div>
+    <div class="srow"><label>추세선 알림</label><button class="tog on" id="tg-lineAlert" onclick="togS(this,'lineAlert')"></button></div>
+    <div class="srow"><label>수평선 알림</label><button class="tog on" id="tg-hlineAlert" onclick="togS(this,'hlineAlert')"></button></div>
 
     <div class="sdiv"></div>
     <div class="stitle">── RSI 다이버전스 ──</div>
@@ -354,21 +362,25 @@ const S = {
   sym:'BTCUSDT', tf:'15m',
   candles:[], ws:null, curPrice:0,
   rsi:[], divs:[], hdivs:[],
-  channelsByTF:{},   // { 'BTCUSDT_15m': [...], 'ETHUSDT_1h': [...], ... }
+  channelsByTF:{},
+  linesByTF:{},      // { 'BTCUSDT_15m': [...] } 추세선/수평선
   drawMode:false, drawStep:0, drawPts:[],
+  lineMode:null,     // 'trend' | 'hline' | null
+  linePts:[],        // 작도 중 점
+  editLocked:false,  // 🔒 잠금 상태
   vpData:[],
   vpZoneState:null,
   vpAlerted:{},
-  lastDivKey:{},   // { '15m': { key:true, ... }, '1h': {...} } TF별 분리
-  alertSilent:false, // TF 전환 직후 알림 차단 플래그
+  lastDivKey:{},
+  alertSilent:false,
   viewOff:0, viewZoom:1,
-  yOffset:0, yZoom:1,        // Y축 이동/줌
+  yOffset:0, yZoom:1,
   drag:false, dragX:0, dragOff:0,
-  yDrag:false, yDragY:0, yDragOffset:0, // Y축 드래그
-  yPinchD:0, yPinchZoom:1,  // Y축 핀치줌
+  yDrag:false, yDragY:0, yDragOffset:0,
+  yPinchD:0, yPinchZoom:1,
   pinchD:0, pinchZ:1,
   magnet:{ active:false, cx:0, cy:0, isMobile:false },
-  edit:{ chId:null, ptKey:null, dragging:false },
+  edit:{ chId:null, ptKey:null, type:null, dragging:false },
   hover:null,
   frozenScale:null,
   cfg:{
@@ -377,6 +389,7 @@ const S = {
     rsiOB:70, rsiOS:30, pivotGap:5,
     vp:true, vpAlert:true, vpProx:0.4,
     sound:true, proximity:0.5, confirmProx:1.0,
+    lineAlert:true, hlineAlert:true, // 추세선/수평선 알림
     notifMuted:false,
     apiKey:''
   }
@@ -384,10 +397,12 @@ const S = {
 
 // 현재 심볼+TF 키
 function tfKey(){ return `${S.sym}_${S.tf}`; }
-// 현재 TF 채널 배열 (읽기)
+// 현재 TF 채널 배열
 function getChans(){ return S.channelsByTF[tfKey()] || []; }
-// 현재 TF 채널 배열 (쓰기)
 function setChans(arr){ S.channelsByTF[tfKey()]=arr; }
+// 현재 TF 선 배열 (추세선/수평선)
+function getLines(){ return S.linesByTF[tfKey()] || []; }
+function setLines(arr){ S.linesByTF[tfKey()]=arr; }
 
 // ═══════════════════════════════════════════════════════
 //  CANVAS SETUP
@@ -537,6 +552,7 @@ function connectWS(){
         document.getElementById('cprice').textContent=fp(c.c);
         calcRSI(); calcVP(); findDivs();
         checkAllChAlerts(c.c, confirmed);
+        checkAllLineAlerts(c.c, confirmed);
         checkVPAlerts(c.c);
         draw();
       }catch(e){ console.error('polling error',e); }
@@ -567,6 +583,7 @@ function connectWS(){
         document.getElementById('cprice').textContent=fp(c.c);
         calcRSI(); calcVP(); findDivs();
         checkAllChAlerts(c.c, confirmed);
+        checkAllLineAlerts(c.c, confirmed);
         checkVPAlerts(c.c);
         draw();
       }
@@ -590,11 +607,8 @@ function loadSym(){
   S.yOffset=0; S.yZoom=1;       // Y축 리셋
   S.viewZoom=1; S.viewOff=0;    // X축 줌/오프셋도 리셋
   S.alertSilent=true;
-  getChans().forEach(ch=>{
-    ch.zoneState=null;
-    ch.nearState=null;
-    ch._lastPrice=null;
-  });
+  getChans().forEach(ch=>{ ch.zoneState=null; ch.nearState=null; ch._lastPrice=null; });
+  getLines().forEach(l=>{ l.zoneState=null; l.nearState=null; l._lastPrice=null; });
   updChPanel(); // TF 전환 시 채널목록 즉시 갱신
   fetchCandles().then(()=>{
     connectWS();
@@ -930,6 +944,7 @@ function draw(){
   drawGrid(mn,mx);
   if(S.cfg.vp&&S.vpData.length) drawVP(mn,mx);
   getChans().filter(ch=>ch.visible).forEach(ch=>drawChannel(ch,si,ei,cw,mn,mx));
+  drawLines(si,ei,cw,mn,mx);
   drawCandles(si,ei,cw,mn,mx);
   drawDivs(si,ei,cw,mn,mx);
   if(S.drawMode&&S.drawPts.length) drawDPts(si,ei,cw,mn,mx);
@@ -1490,6 +1505,7 @@ function fireBreak(ch, zone, price, alertTf=S.tf){
 // ═══════════════════════════════════════════════════════
 function startDraw(){
   if(S.drawMode){cancelDraw();return;}
+  cancelLineDraw();
   if(getChans().length>=5){showToast('⚠️','채널 최대 5개까지 가능','기존 채널을 먼저 삭제해주세요','t-ext');return;}
   S.drawMode=true; S.drawStep=1; S.drawPts=[];
   cv.style.cursor='crosshair';
@@ -1508,6 +1524,221 @@ function cancelDraw(){
   document.getElementById('btnDraw').textContent='✏️ 채널 작도';
   document.getElementById('dstatus').style.display='none';
   draw();
+}
+
+// ═══════════════════════════════════════════════════════
+//  LINE DRAW (추세선 / 수평선)
+// ═══════════════════════════════════════════════════════
+const LINE_COLORS = ['#ffd600','#ff6b35','#00e5ff','#ff4081','#69ff47','#b388ff','#ff6d00','#00e676'];
+
+function startLineDraw(type){
+  if(S.lineMode===type){ cancelLineDraw(); return; }
+  cancelDraw(); cancelLineDraw();
+  S.lineMode=type; S.linePts=[];
+  cv.style.cursor='crosshair';
+  const btnId = type==='trend'?'btnTrend':'btnHline';
+  document.getElementById(btnId).classList.add('active');
+  document.getElementById(btnId).textContent = type==='trend'?'✖ 추세선 취소':'✖ 수평선 취소';
+  const ds=document.getElementById('dstatus');
+  ds.style.display='block';
+  ds.textContent = type==='trend'?'① 첫째 점 클릭':'① 수평선 위치 클릭';
+}
+
+function cancelLineDraw(){
+  if(!S.lineMode) return;
+  const btnId = S.lineMode==='trend'?'btnTrend':'btnHline';
+  const btn = document.getElementById(btnId);
+  if(btn){ btn.classList.remove('active'); btn.textContent=S.lineMode==='trend'?'📈 추세선':'➖ 수평선'; }
+  S.lineMode=null; S.linePts=[];
+  S.magnet.active=false;
+  cv.style.cursor='default';
+  document.getElementById('dstatus').style.display='none';
+  draw();
+}
+
+function handleLineClick(cx, cy, isMobile=false){
+  if(!S.lineMode) return;
+  if(S.cfg.rsi&&cy>=rsiTop()) return;
+  const{si,ei,cw}=visR();
+  const{mn,mx}=prR(si,ei);
+  const snap = magnetSnap(cx,cy,si,cw,mn,mx,isMobile);
+  const idx   = snap?snap.idx:Math.max(0,Math.min(S.candles.length-1,Math.round(FX(cx,si,cw))));
+  const price = snap?snap.price:FY(cy,mn,mx);
+  const ts    = S.candles[idx]?.t||0;
+  const pt    = {idx,ts,price};
+
+  if(S.lineMode==='hline'){
+    // 수평선: 점 1개로 완성
+    addLine('hline', pt, null);
+    cancelLineDraw();
+    return;
+  }
+  // 추세선: 점 2개 필요
+  S.linePts.push(pt);
+  if(S.linePts.length===1){
+    document.getElementById('dstatus').textContent='② 둘째 점 클릭';
+    draw();
+  } else {
+    addLine('trend', S.linePts[0], S.linePts[1]);
+    cancelLineDraw();
+  }
+}
+
+function addLine(type, p1, p2){
+  const lines = getLines();
+  const colorIdx = (Object.values(S.linesByTF).flat().length) % LINE_COLORS.length;
+  const line = {
+    id: Date.now(),
+    type,       // 'trend' | 'hline'
+    p1, p2,     // p2 = null for hline
+    color: LINE_COLORS[colorIdx],
+    visible: true,
+    zoneState: null,
+    nearState: null,
+    _lastPrice: null
+  };
+  if(!S.linesByTF[tfKey()]) S.linesByTF[tfKey()]=[];
+  S.linesByTF[tfKey()].push(line);
+  autoSave(); draw();
+  addLog(`📐 ${type==='trend'?'추세선':'수평선'} 추가됨`, 'success');
+}
+
+// 선의 현재 인덱스에서 가격 계산
+function linePrice(line, idx){
+  if(line.type==='hline') return line.p1.price;
+  const i1=ptIdx(line.p1), i2=ptIdx(line.p2);
+  if(i1===i2) return line.p1.price;
+  const slope=(line.p2.price-line.p1.price)/(i2-i1);
+  return line.p1.price+slope*(idx-i1);
+}
+
+// ── 선 렌더링 ──────────────────────────────────────────
+function drawLines(si,ei,cw,mn,mx){
+  getLines().filter(l=>l.visible).forEach(line=>{
+    const col=line.color||'#ffd600';
+    ctx.save();
+    ctx.strokeStyle=col; ctx.lineWidth=1.5;
+    ctx.setLineDash(line.type==='hline'?[5,4]:[]);
+
+    if(line.type==='hline'){
+      const y=Y(line.p1.price,mn,mx);
+      ctx.beginPath(); ctx.moveTo(P.l,y); ctx.lineTo(W-P.r,y); ctx.stroke();
+      ctx.setLineDash([]);
+      // 가격 라벨
+      ctx.fillStyle=col; ctx.font='bold 10px Courier New,monospace'; ctx.textAlign='right';
+      ctx.fillText(fp(line.p1.price), W-P.r-2, y-3);
+      // 드래그 핸들
+      _drawLinePtDot(X(ptIdx(line.p1),si,cw), y, col, line.id, 'p1');
+    } else {
+      // 추세선 양방향 연장
+      const i1=ptIdx(line.p1), i2=ptIdx(line.p2);
+      const slope=i1===i2?0:(line.p2.price-line.p1.price)/(i2-i1);
+      // 화면 왼쪽~오른쪽까지 연장
+      const extL=si-50, extR=ei+50;
+      const pL=line.p1.price+slope*(extL-i1);
+      const pR=line.p1.price+slope*(extR-i1);
+      ctx.beginPath();
+      ctx.moveTo(X(extL,si,cw),Y(pL,mn,mx));
+      ctx.lineTo(X(extR,si,cw),Y(pR,mn,mx));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 드래그 핸들
+      _drawLinePtDot(X(i1,si,cw),Y(line.p1.price,mn,mx),col,line.id,'p1');
+      _drawLinePtDot(X(i2,si,cw),Y(line.p2.price,mn,mx),col,line.id,'p2');
+    }
+    ctx.restore();
+  });
+}
+
+function _drawLinePtDot(x,y,col,lineId,ptKey){
+  const isHovered = S.hover && S.hover.lineId===lineId && S.hover.ptKey===ptKey;
+  ctx.fillStyle = isHovered?'#fff':col;
+  ctx.beginPath(); ctx.arc(x,y,isHovered?6:4,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=col; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.arc(x,y,isHovered?6:4,0,Math.PI*2); ctx.stroke();
+}
+
+// ── 선 점 편집 ─────────────────────────────────────────
+function findNearestLinePt(cx,cy,isMobile=false){
+  if(S.editLocked) return null;
+  const{si,ei,cw}=visR();
+  const{mn,mx}=prR(si,ei);
+  const hitR=(isMobile?28:16);
+  let best=null, bestD=Infinity;
+  getLines().filter(l=>l.visible).forEach(line=>{
+    const pts = line.type==='hline'?['p1']:['p1','p2'];
+    pts.forEach(key=>{
+      const pt=line[key]; if(!pt) return;
+      const px=line.type==='hline'?X(ptIdx(pt),si,cw):X(ptIdx(pt),si,cw);
+      const py=line.type==='hline'?Y(pt.price,mn,mx):Y(pt.price,mn,mx);
+      const d=Math.hypot(cx-px,cy-py);
+      if(d<hitR&&d<bestD){ bestD=d; best={lineId:line.id,ptKey:key,isLine:true}; }
+    });
+  });
+  return best;
+}
+
+// ── 선 알림 체크 ───────────────────────────────────────
+function checkAllLineAlerts(price, confirmed=false){
+  if(S.alertSilent) return;
+  getLines().filter(l=>l.visible).forEach(line=>{
+    const isHline = line.type==='hline';
+    if(isHline && !S.cfg.hlineAlert) return;
+    if(!isHline && !S.cfg.lineAlert) return;
+    const idx = S.candles.length-1;
+    const lp  = linePrice(line, idx);
+    const prox = S.cfg.proximity/100;
+    const cprox = S.cfg.confirmProx/100;
+    if(!line.nearState) line.nearState=null;
+
+    const near = Math.abs(price-lp)/lp <= prox;
+    if(near){
+      if(!line.nearState){
+        const prevPrice = line._lastPrice||price;
+        const isFromAbove = prevPrice>lp;
+        line.nearState={isFromAbove,lp};
+        line.zoneState='near';
+        const typeName = isHline?'수평선':'추세선';
+        const srText = isFromAbove?'지지':'저항';
+        const emoji = isFromAbove?'📍':'📍';
+        const title = `[${S.tf}] ${typeName} ${srText} 근접`;
+        const sub = `가격 ${fp(price)} | 레벨 ${fp(lp)}`;
+        showToast(emoji,title,sub,isFromAbove?'t-bull':'t-bear');
+        sendNotif(title,sub);
+        playSound(isFromAbove?'bull':'bear');
+        addLog(`${emoji} ${title} | ${sub}`, isFromAbove?'t-bull':'t-bear');
+      }
+    } else if(line.nearState){
+      const {isFromAbove} = line.nearState;
+      const escaped_up   = price > lp*(1+cprox);
+      const escaped_down = price < lp*(1-cprox);
+      if((escaped_up||escaped_down) && confirmed){
+        const broke = isFromAbove?escaped_down:escaped_up;
+        const typeName = isHline?'수평선':'추세선';
+        const emoji = broke?(isFromAbove?'💥':'🚀'):(isFromAbove?'🟢':'🔴');
+        const action = broke?(isFromAbove?'하방 돌파':'상방 돌파'):(isFromAbove?'지지 확인':'저항 확인');
+        const title = `[${S.tf}] ${typeName} ${action}!`;
+        const sub = `가격 ${fp(price)} | 레벨 ${fp(lp)}`;
+        showToast(emoji,title,sub,broke?'t-break':(isFromAbove?'t-bull':'t-bear'));
+        sendNotif(title,sub);
+        playSound(broke?'break':(isFromAbove?'bull':'bear'));
+        addLog(`${emoji} ${title} | ${sub}`, broke?'t-break':(isFromAbove?'t-bull':'t-bear'));
+        line.nearState=null; line.zoneState=null;
+      }
+    }
+    line._lastPrice=price;
+  });
+}
+
+// ── 잠금 토글 ─────────────────────────────────────────
+function toggleLock(){
+  S.editLocked=!S.editLocked;
+  const btn=document.getElementById('btnLock');
+  btn.textContent=S.editLocked?'🔒 잠금중':'🔓 잠금해제';
+  btn.style.color=S.editLocked?'var(--yellow)':'';
+  showToast(S.editLocked?'🔒':'🔓', S.editLocked?'작도 잠금 ON':'작도 잠금 OFF',
+    S.editLocked?'실수 터치로 인한 수정 방지':'편집 가능 상태','t-touch');
+  autoSave();
 }
 
 function handleClick(cx,cy,isMobile=false){
@@ -1558,16 +1789,28 @@ const EDIT_HIT_R = 14; // px — 클릭 감지 반경 (모바일은 2배)
 
 // 커서/터치 위치에서 가장 가까운 채널 점 찾기
 function findNearestPt(cx, cy, isMobile=false){
+  if(S.editLocked) return null;
   const{si,ei,cw}=visR();
   const{mn,mx}=prR(si,ei);
   const hitR = isMobile ? EDIT_HIT_R*2 : EDIT_HIT_R;
   let best=null, bestD=Infinity;
+  // 채널 점
   getChans().filter(ch=>ch.visible).forEach(ch=>{
     ['p1','p2','p3'].forEach(key=>{
       const pt=ch[key];
       const px=X(ptIdx(pt),si,cw), py=Y(pt.price,mn,mx);
       const d=Math.hypot(px-cx,py-cy);
       if(d<=hitR && d<bestD){ bestD=d; best={chId:ch.id,ptKey:key}; }
+    });
+  });
+  // 선 점 (추세선/수평선)
+  getLines().filter(l=>l.visible).forEach(line=>{
+    const pts = line.type==='hline'?['p1']:['p1','p2'];
+    pts.forEach(key=>{
+      const pt=line[key]; if(!pt) return;
+      const px=X(ptIdx(pt),si,cw), py=Y(pt.price,mn,mx);
+      const d=Math.hypot(px-cx,py-cy);
+      if(d<=hitR && d<bestD){ bestD=d; best={lineId:line.id,ptKey:key}; }
     });
   });
   return best;
@@ -1586,7 +1829,16 @@ function updateEditPt(cx, cy, isMobile=false){
   const ts = S.candles[idx]?.t || 0;
   // 자석 미리보기용
   S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=isMobile;
-  ch[S.edit.ptKey]={idx, ts, price};
+  // 채널 점 또는 선 점 업데이트
+  if(S.edit.chId){
+    ch[S.edit.ptKey]={idx, ts, price};
+  } else if(S.edit.lineId){
+    const line=getLines().find(l=>l.id===S.edit.lineId);
+    if(line){
+      if(line.type==='hline') line[S.edit.ptKey]={...line[S.edit.ptKey], price, idx, ts};
+      else line[S.edit.ptKey]={idx, ts, price};
+    }
+  }
   draw();
 }
 
@@ -1594,14 +1846,19 @@ function updateEditPt(cx, cy, isMobile=false){
 function commitEditPt(){
   S.edit.dragging=false;
   S.magnet.active=false;
-  S.frozenScale=null; // Y축 고정 해제
+  S.frozenScale=null;
   if(S.edit.chId){
     const ch=getChans().find(c=>c.id===S.edit.chId);
     if(ch){ ch.zoneState=null; ch.touchCounts={}; }
     autoSave();
     addLog(`${ch?.name||''} 채널 점 수정됨 ✓`,'success');
+  } else if(S.edit.lineId){
+    const line=getLines().find(l=>l.id===S.edit.lineId);
+    if(line){ line.zoneState=null; line.nearState=null; }
+    autoSave();
+    addLog(`📐 선 점 수정됨 ✓`,'success');
   }
-  S.edit.chId=null; S.edit.ptKey=null;
+  S.edit.chId=null; S.edit.lineId=null; S.edit.ptKey=null;
   cv.style.cursor='default';
   draw();
 }
@@ -1889,9 +2146,13 @@ cv.addEventListener('mousedown',e=>{
   const hit=findNearestPt(cx,cy,false);
   if(hit){
     const{si,ei}=visR(); S.frozenScale=prR(si,ei);
-    S.edit.chId=hit.chId; S.edit.ptKey=hit.ptKey; S.edit.dragging=true;
+    S.edit.chId=hit.chId||null;
+    S.edit.lineId=hit.lineId||null;
+    S.edit.ptKey=hit.ptKey; S.edit.dragging=true;
     cv.style.cursor='grabbing'; return;
   }
+  // 선 작도 모드 클릭
+  if(S.lineMode){ handleLineClick(cx,cy,false); return; }
   S.drag=true; S.dragX=e.clientX; S.dragOff=S.viewOff;
 });
 
@@ -1951,15 +2212,19 @@ cv.addEventListener('touchstart',e=>{
       return;
     }
 
-    // 채널 점 근처 탭 → 편집 시작
+    // 채널/선 점 근처 탭 → 편집 시작
     const hit=findNearestPt(cx,cy,true);
     if(hit){
       e.preventDefault();
       const{si,ei}=visR(); S.frozenScale=prR(si,ei);
-      S.edit.chId=hit.chId; S.edit.ptKey=hit.ptKey; S.edit.dragging=true;
+      S.edit.chId=hit.chId||null;
+      S.edit.lineId=hit.lineId||null;
+      S.edit.ptKey=hit.ptKey; S.edit.dragging=true;
       S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=true;
       draw(); return;
     }
+    // 선 작도 모드 탭
+    if(S.lineMode){ e.preventDefault(); handleLineClick(cx,cy,true); return; }
 
     S.drag=false;
     longPressTimer=setTimeout(()=>{
@@ -2065,7 +2330,6 @@ document.querySelectorAll('.chip.tf').forEach(b=>{
 const LS_KEY = 'cht_v1_20260320_draft1';
 
 function buildSaveData(){
-  // 전체 TF별 채널 저장
   const allChs={};
   Object.entries(S.channelsByTF).forEach(([k,arr])=>{
     allChs[k]=arr.map(ch=>({
@@ -2074,10 +2338,18 @@ function buildSaveData(){
       visible:ch.visible, touchCounts:ch.touchCounts
     }));
   });
+  const allLines={};
+  Object.entries(S.linesByTF).forEach(([k,arr])=>{
+    allLines[k]=arr.map(l=>({
+      id:l.id, type:l.type, color:l.color,
+      p1:l.p1, p2:l.p2, visible:l.visible
+    }));
+  });
   return {
-    sym: S.sym,
-    tf:  S.tf,
+    sym: S.sym, tf: S.tf,
     channelsByTF: allChs,
+    linesByTF: allLines,
+    editLocked: S.editLocked,
     cfg: S.cfg,
     savedAt: new Date().toISOString()
   };
@@ -2097,18 +2369,28 @@ function applySaveData(data){
       b.classList.toggle('active', b.dataset.tf===data.tf);
     });
   }
-  // 신규 포맷 (channelsByTF) 복원
   if(data.channelsByTF){
     S.channelsByTF={};
     Object.entries(data.channelsByTF).forEach(([k,arr])=>{
-      S.channelsByTF[k]=arr.map(ch=>({...ch,zoneState:null,touchCounts:ch.touchCounts||{}}));
+      S.channelsByTF[k]=arr.map(ch=>({...ch,zoneState:null,nearState:null,touchCounts:ch.touchCounts||{}}));
     });
-  }
-  // 구버전 포맷 호환 (channels 단일 배열이면 현재 TF에 할당)
-  else if(data.channels && Array.isArray(data.channels)){
+  } else if(data.channels && Array.isArray(data.channels)){
     S.channelsByTF={};
     const k=`${data.sym||S.sym}_${data.tf||S.tf}`;
-    S.channelsByTF[k]=data.channels.map(ch=>({...ch,zoneState:null,touchCounts:ch.touchCounts||{}}));
+    S.channelsByTF[k]=data.channels.map(ch=>({...ch,zoneState:null,nearState:null,touchCounts:ch.touchCounts||{}}));
+  }
+  // 선 복원
+  if(data.linesByTF){
+    S.linesByTF={};
+    Object.entries(data.linesByTF).forEach(([k,arr])=>{
+      S.linesByTF[k]=arr.map(l=>({...l,zoneState:null,nearState:null,_lastPrice:null}));
+    });
+  }
+  // 잠금 상태 복원
+  if(data.editLocked!==undefined){
+    S.editLocked=data.editLocked;
+    const btn=document.getElementById('btnLock');
+    if(btn){ btn.textContent=S.editLocked?'🔒 잠금중':'🔓 잠금해제'; btn.style.color=S.editLocked?'var(--yellow)':''; }
   }
   if(data.cfg){ Object.assign(S.cfg,data.cfg); syncSettingsUI(); }
   updChPanel();
@@ -2119,7 +2401,8 @@ function syncSettingsUI(){
   const togMap = {
     'tg-touch':'touch','tg-ext':'ext','tg-4th':'4th',
     'tg-rdiv':'rdiv','tg-hdiv':'hdiv','tg-rsi':'rsi',
-    'tg-vp':'vp','tg-vpAlert':'vpAlert','tg-sound':'sound'
+    'tg-vp':'vp','tg-vpAlert':'vpAlert','tg-sound':'sound',
+    'tg-lineAlert':'lineAlert','tg-hlineAlert':'hlineAlert'
   };
   Object.entries(togMap).forEach(([id,key])=>{
     const el=document.getElementById(id);
