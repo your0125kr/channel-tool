@@ -1727,7 +1727,7 @@ function addLine(type, p1, p2){
   };
   if(!S.linesByTF[tfKey()]) S.linesByTF[tfKey()]=[];
   S.linesByTF[tfKey()].push(line);
-  autoSave(); draw();
+  updChPanel(); autoSave(); draw();
   addLog(`📐 ${type==='trend'?'추세선':'수평선'} 추가됨`, 'success');
 }
 
@@ -1962,26 +1962,21 @@ function findNearestPt(cx, cy, isMobile=false){
 
 // 편집 드래그 중 점 위치 업데이트 (자석 적용)
 function updateEditPt(cx, cy, isMobile=false){
-  if(!S.edit.chId||!S.edit.ptKey) return;
-  const ch=getChans().find(c=>c.id===S.edit.chId);
-  if(!ch) return;
+  // 채널 점 또는 선 점 둘 다 처리
+  if((!S.edit.chId && !S.edit.lineId) || !S.edit.ptKey) return;
   const{si,ei,cw}=visR();
   const{mn,mx}=prR(si,ei);
   const snap=magnetSnap(cx,cy,si,cw,mn,mx,isMobile);
   const idx   = snap ? snap.idx   : Math.max(0,Math.min(S.candles.length-1,Math.round(FX(cx,si,cw))));
   const price = snap ? snap.price : FY(cy,mn,mx);
   const ts = S.candles[idx]?.t || 0;
-  // 자석 미리보기용
   S.magnet.active=true; S.magnet.cx=cx; S.magnet.cy=cy; S.magnet.isMobile=isMobile;
-  // 채널 점 또는 선 점 업데이트
   if(S.edit.chId){
-    ch[S.edit.ptKey]={idx, ts, price};
+    const ch=getChans().find(c=>c.id===S.edit.chId);
+    if(ch) ch[S.edit.ptKey]={idx, ts, price};
   } else if(S.edit.lineId){
     const line=getLines().find(l=>l.id===S.edit.lineId);
-    if(line){
-      if(line.type==='hline') line[S.edit.ptKey]={...line[S.edit.ptKey], price, idx, ts};
-      else line[S.edit.ptKey]={idx, ts, price};
-    }
+    if(line) line[S.edit.ptKey]={idx, ts, price};
   }
   draw();
 }
@@ -2447,6 +2442,7 @@ cv.addEventListener('touchmove',e=>{
     S.magnet.cy=e.touches[0].clientY-r.top;
     S.magnet.isMobile=true; draw(); return;
   }
+  if(CH_STATE.active&&e.touches.length===1){
     const r=cv.getBoundingClientRect();
     CH_STATE.x=e.touches[0].clientX-r.left;
     CH_STATE.y=e.touches[0].clientY-r.top;
