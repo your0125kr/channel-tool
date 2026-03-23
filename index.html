@@ -920,7 +920,7 @@ function prR(si,ei){
     const mid=(fmn+fmx)/2;
     const half=(fmx-fmn)/2;
     const zoomed_half=half/S.yZoom;
-    return{mn:mid-zoomed_half+S.yOffset, mx:mid+zoomed_half+S.yOffset};
+    return{mn:mid-zoomed_half-S.yOffset, mx:mid+zoomed_half-S.yOffset};
   }
   const sl=S.candles.slice(si,ei);
   if(!sl.length) return{mn:0,mx:1};
@@ -932,7 +932,7 @@ function prR(si,ei){
   const half=(base_mx-base_mn)/2;
   const zoomed_half=half/S.yZoom;
   // yOffset는 가격 단위
-  return{mn:mid-zoomed_half+S.yOffset, mx:mid+zoomed_half+S.yOffset};
+  return{mn:mid-zoomed_half-S.yOffset, mx:mid+zoomed_half-S.yOffset};
 }
 
 function X(idx,si,cw){return P.l+(idx-si)*cw+cw/2;}
@@ -2161,7 +2161,9 @@ cv.addEventListener('mousemove',e=>{
   // X축 드래그
   if(S.drag && S.dragAxis==='x'){
     const{cw}=visR();
-    S.viewOff=Math.max(0,Math.min(S.candles.length-10,S.dragOff+Math.round(-(e.clientX-S.dragX)/cw)));
+    // 지도 당기기: 매 프레임 delta 기반 (찍은 지점 따라오기)
+    const deltaCandles = -(e.clientX - S.dragX) / cw;
+    S.viewOff = Math.max(0, Math.min(S.candles.length-10, S.dragOff + Math.round(deltaCandles)));
     hideCrosshair(); draw(); return;
   }
   // Y축 드래그 (1:1 픽셀→가격 매핑)
@@ -2336,7 +2338,9 @@ cv.addEventListener('touchmove',e=>{
     }
     if(S.dragAxis==='x'){
       const{cw}=visR();
-      S.viewOff=Math.max(0,Math.min(S.candles.length-10,S.dragOff+Math.round(-(tx-S.dragX)/cw)));
+      // 지도 당기기: 매 프레임 delta 기반
+      const deltaCandles = -(tx - S.dragX) / cw;
+      S.viewOff = Math.max(0, Math.min(S.candles.length-10, S.dragOff + Math.round(deltaCandles)));
     } else {
       // 1:1 픽셀→가격 매핑 (지도 당기기)
       const ppp = S._yDragPricePerPx || (S.frozenScale?(S.frozenScale.mx-S.frozenScale.mn)/mainH():1);
