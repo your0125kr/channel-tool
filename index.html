@@ -274,6 +274,16 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
       <input type="range" min="3" max="15" step="1" value="5" oninput="updCfg('pivotGap',parseInt(this.value),this,'pg-v','');findDivs();draw()">
       <span class="sval" id="pg-v">5</span>
     </div>
+    <div class="srow">
+      <label>수렴 확인 캔들 수</label>
+      <input type="range" min="2" max="5" step="1" value="3" oninput="updCfg('divConfirm',parseInt(this.value),this,'dc-v','')">
+      <span class="sval" id="dc-v">3</span>
+    </div>
+    <div class="srow">
+      <label>다이버전스 최대 간격 (캔들)</label>
+      <input type="range" min="20" max="200" step="10" value="80" oninput="updCfg('divMaxGap',parseInt(this.value),this,'dmg-v','');findDivs();draw()">
+      <span class="sval" id="dmg-v">80</span>
+    </div>
 
     <div class="sdiv"></div>
     <div class="stitle">── Volume Profile ──</div>
@@ -387,7 +397,7 @@ const S = {
   cfg:{
     touch:true, ext:true, '4th':true,
     rdiv:true, hdiv:true, rsi:true,
-    rsiOB:70, rsiOS:30, pivotGap:5,
+    rsiOB:70, rsiOS:30, pivotGap:5, divConfirm:3, divMaxGap:80, divMaxGap:80,
     vp:true, vpAlert:true, vpProx:0.4,
     sound:true, proximity:0.5, confirmProx:1.0,
     lineAlert:true, hlineAlert:true, // 추세선/수평선 알림
@@ -720,96 +730,178 @@ function calcVP(){
 // ═══════════════════════════════════════════════════════
 //  DIVERGENCE
 // ═══════════════════════════════════════════════════════
-function getPivots(arr, n){
-  const H=[],L=[];
-  for(let i=n;i<arr.length-n;i++){
+
+// 피벗 감지: 저점/고점 후 반전 확인 방식 (급격한 스파이크도 감지)
+function getPivots(arr, gap){
+  const H=[], L=[], n=arr.length;
+  for(let i=1; i<n-1; i++){
     if(arr[i]==null) continue;
-    let h=true,l=true;
-    for(let j=i-n;j<=i+n;j++){
-      if(j===i||arr[j]==null) continue;
-      if(arr[j]>=arr[i])h=false;
-      if(arr[j]<=arr[i])l=false;
+    const prev=arr[i-1];
+    if(prev==null) continue;
+    // 저점 후보: 이전보다 낮고 이후 최소 1개 상승
+    if(arr[i] < prev){
+      let rising=0;
+      for(let j=i+1; j<Math.min(n,i+gap+1); j++){
+        if(arr[j]==null) break;
+        if(arr[j]>arr[i]) rising++; else break;
+      }
+      if(rising>=1) L.push(i);
     }
-    if(h)H.push(i); if(l)L.push(i);
+    // 고점 후보: 이전보다 높고 이후 최소 1개 하락
+    if(arr[i] > prev){
+      let falling=0;
+      for(let j=i+1; j<Math.min(n,i+gap+1); j++){
+        if(arr[j]==null) break;
+        if(arr[j]<arr[i]) falling++; else break;
+      }
+      if(falling>=1) H.push(i);
+    }
   }
-  return{H,L};
+  // 중복 제거: 너무 가까운 피벗은 더 극단적인 것만 유지
+  function dedup(arr2, isLow){
+    const result=[];
+    for(let k=0;k<arr2.length;k++){
+      const cur=arr2[k];
+      if(!result.length){result.push(cur);continue;}
+      const last=result[result.length-1];
+      if(cur-last<gap){
+        if(isLow?arr[cur]<arr[last]:arr[cur]>arr[last]) result[result.length-1]=cur;
+      } else result.push(cur);
+    }
+    return result;
+  }
+  return{H:dedup(H,false), L:dedup(L,true)};
+}
+
+// 수렴 확인: i2 이후 CONFIRM개 캔들이 방향대로 움직이는지
+function checkConvergence(rsi, i2, confirm, isBull){
+  const n=rsi.length;
+  if(i2+confirm>=n) return false;
+  let count=0;
+  for(let j=i2+1;j<=i2+confirm;j++){
+    if(rsi[j]==null) break;
+    if(isBull?rsi[j]>rsi[j-1]:rsi[j]<rsi[j-1]) count++;
+  }
+  return count>=confirm;
 }
 
 function findDivs(silent=false){
   const rsi=S.rsi, C=S.candles, n=C.length;
   const gap=S.cfg.pivotGap, OB=S.cfg.rsiOB, OS=S.cfg.rsiOS;
+  const CONFIRM=S.cfg.divConfirm||3;
+  const MAX_GAP=S.cfg.divMaxGap||80;
   const MIN_P=0.003, MIN_R=2;
-  const CONFIRM=2; // candles after pivot before confirming
+  const OS_RELAX=OS+10, OB_RELAX=OB-10;
   S.divs=[]; S.hdivs=[];
   if(n<30) return;
-  const{H,L}=getPivots(rsi, Math.max(2,Math.floor(gap/2)));
+  const{H,L}=getPivots(rsi, gap);
 
-  // ── Regular Bullish: price LL + RSI HL ──
-  // 조건: 둘 중 하나는 반드시 OS(30) 이하, 나머지는 OS+10(40) 이하
-  for(let b=1;b<L.length;b++){
-    const i2=L[b], i1=L[b-1];
-    if(i2-i1<gap) continue;
-    if(n-i2<=CONFIRM) continue;
-    const r1=rsi[i1], r2=rsi[i2];
-    if(!r1||!r2) continue;
-    const oneStrict = r1<=OS || r2<=OS;       // 하나는 반드시 30 이하
-    const bothRelax = r1<=(OS+10) && r2<=(OS+10); // 둘 다 40 이하
-    if(!oneStrict || !bothRelax) continue;
-    const p1=C[i1].l, p2=C[i2].l;
-    if(p2>=p1) continue; if(r2<=r1) continue;
-    if((p1-p2)/p1<MIN_P) continue; if(r2-r1<MIN_R) continue;
-    S.divs.push({type:'bull',i1,i2,p1,p2,r1,r2});
+  // 신뢰도 점수
+  function score(priceDiff, rsiDiff, interval){
+    return (priceDiff*100) * rsiDiff * Math.sqrt(interval);
   }
-  // ── Regular Bearish: price HH + RSI LH ──
-  // 조건: 둘 중 하나는 반드시 OB(70) 이상, 나머지는 OB-10(60) 이상
-  for(let b=1;b<H.length;b++){
-    const i2=H[b], i1=H[b-1];
-    if(i2-i1<gap) continue;
-    if(n-i2<=CONFIRM) continue;
-    const r1=rsi[i1], r2=rsi[i2];
-    if(!r1||!r2) continue;
-    const oneStrict = r1>=OB || r2>=OB;       // 하나는 반드시 70 이상
-    const bothRelax = r1>=(OB-10) && r2>=(OB-10); // 둘 다 60 이상
-    if(!oneStrict || !bothRelax) continue;
-    const p1=C[i1].h, p2=C[i2].h;
-    if(p2<=p1) continue; if(r2>=r1) continue;
-    if((p2-p1)/p1<MIN_P) continue; if(r1-r2<MIN_R) continue;
-    S.divs.push({type:'bear',i1,i2,p1,p2,r1,r2});
+
+  // 최근 i2 기준 MAX_GAP 이내에 조건 맞는 피벗이 있는지 확인
+  // 없으면 전체에서 가장 최근 피벗으로 자동 확장
+  function getEffectivePivots(pivots, i2, isBull){
+    // MAX_GAP 이내 후보
+    const inRange = pivots.filter(i1=> i1<i2 && i2-i1>=gap && i2-i1<=MAX_GAP &&
+      (isBull ? (rsi[i1]<=OS_RELAX) : (rsi[i1]>=OB_RELAX))
+    );
+    if(inRange.length>0) return inRange;
+
+    // MAX_GAP 이내에 OB/OS 피벗 없음 → 자동 확장: 전체에서 가장 최근 조건 맞는 피벗
+    const extended = pivots.filter(i1=> i1<i2 && i2-i1>=gap &&
+      (isBull ? (rsi[i1]<=OS_RELAX) : (rsi[i1]>=OB_RELAX))
+    );
+    if(!extended.length) return [];
+    // 가장 최신 것만 반환
+    return [extended[extended.length-1]];
   }
-  // ── Hidden Bullish: price HL + RSI LL ──
-  // 조건: 둘 중 하나는 반드시 OS(30) 이하, 나머지는 40 이하
-  for(let b=1;b<L.length;b++){
-    const i2=L[b], i1=L[b-1];
-    if(i2-i1<gap) continue;
-    if(n-i2<=CONFIRM) continue;
-    const r1=rsi[i1], r2=rsi[i2];
-    if(!r1||!r2) continue;
-    const oneStrict = r1<=OS || r2<=OS;
-    const bothRelax = r1<=(OS+10) && r2<=(OS+10);
-    if(!oneStrict || !bothRelax) continue;
-    const p1=C[i1].l, p2=C[i2].l;
-    if(p2<=p1) continue; if(r2>=r1) continue;
-    if(Math.abs(p2-p1)/p1<MIN_P) continue;
-    if(Math.abs(r2-r1)<MIN_R) continue;
-    S.hdivs.push({type:'hbull',i1,i2,p1,p2,r1,r2});
+
+  // 모든 조합 비교 후 i2별 최고 점수만 유지
+  function bestPairs(pivots, isBull, isHidden){
+    const best={};
+    for(let b=0;b<pivots.length;b++){
+      const i2=pivots[b];
+      const r2=rsi[i2];
+      if(!r2) continue;
+      // i2 자체가 OB/OS 조건 충족해야
+      if(isBull && r2>OS_RELAX) continue;
+      if(!isBull && r2<OB_RELAX) continue;
+
+      const candidates = getEffectivePivots(pivots, i2, isBull);
+      for(const i1 of candidates){
+        const r1=rsi[i1];
+        if(!r1) continue;
+        // 둘 중 하나는 엄격 조건 만족
+        if(isBull && !(r1<=OS||r2<=OS)) continue;
+        if(!isBull && !(r1>=OB||r2>=OB)) continue;
+
+        let p1, p2;
+        if(!isHidden){
+          if(isBull){ p1=C[i1].l; p2=C[i2].l; if(p2>=p1||r2<=r1) continue; }
+          else       { p1=C[i1].h; p2=C[i2].h; if(p2<=p1||r2>=r1) continue; }
+        } else {
+          if(isBull){ p1=C[i1].l; p2=C[i2].l; if(p2<=p1||r2>=r1) continue; }
+          else       { p1=C[i1].h; p2=C[i2].h; if(p2>=p1||r2<=r1) continue; }
+        }
+        const pDiff=Math.abs(p2-p1)/p1;
+        const rDiff=Math.abs(r2-r1);
+        if(pDiff<MIN_P||rDiff<MIN_R) continue;
+        const sc=score(pDiff,rDiff,i2-i1);
+        if(!best[i2]||sc>best[i2].sc){
+          const converged=checkConvergence(rsi,i2,CONFIRM,isBull);
+          best[i2]={i1,i2,p1,p2,r1,r2,converged,sc};
+        }
+      }
+    }
+    return Object.values(best);
   }
-  // ── Hidden Bearish: price LH + RSI HH ──
-  // 조건: 둘 중 하나는 반드시 OB(70) 이상, 나머지는 60 이상
-  for(let b=1;b<H.length;b++){
-    const i2=H[b], i1=H[b-1];
-    if(i2-i1<gap) continue;
-    if(n-i2<=CONFIRM) continue;
-    const r1=rsi[i1], r2=rsi[i2];
-    if(!r1||!r2) continue;
-    const oneStrict = r1>=OB || r2>=OB;
-    const bothRelax = r1>=(OB-10) && r2>=(OB-10);
-    if(!oneStrict || !bothRelax) continue;
-    const p1=C[i1].h, p2=C[i2].h;
-    if(p2>=p1) continue; if(r2<=r1) continue;
-    if(Math.abs(p2-p1)/p1<MIN_P) continue;
-    if(Math.abs(r2-r1)<MIN_R) continue;
-    S.hdivs.push({type:'hbear',i1,i2,p1,p2,r1,r2});
+
+  // 정규 다이버전스
+  const bullDivs = bestPairs(L,true,false);
+  const bearDivs = bestPairs(H,false,false);
+  // 히든 다이버전스
+  const hbullDivs = bestPairs(L,true,true);
+  const hbearDivs = bestPairs(H,false,true);
+
+  // i1/i2 모두 기준으로 중복 제거 (같은 i1이 여러 i2와 쌍을 이루면 점수 높은 것만)
+  function dedupeByI1(divs){
+    const bestByI1={};
+    divs.forEach(d=>{
+      if(!bestByI1[d.i1]||d.sc>bestByI1[d.i1].sc) bestByI1[d.i1]=d;
+    });
+    return Object.values(bestByI1);
   }
+
+  // 겹치는 쌍 제거: 구간 [i1,i2]가 겹치면 점수 높은 것만 유지
+  function dedupeOverlap(divs){
+    // 점수 내림차순 정렬
+    const sorted = [...divs].sort((a,b)=>b.sc-a.sc);
+    const kept = [];
+    for(const d of sorted){
+      // 이미 kept에 있는 것과 겹치는지 확인
+      const overlaps = kept.some(k=>
+        d.i1 < k.i2 && k.i1 < d.i2  // 구간 겹침 조건
+      );
+      if(!overlaps) kept.push(d);
+    }
+    return kept;
+  }
+
+  S.divs=[
+    ...dedupeOverlap(dedupeByI1(bullDivs)).map(d=>({type:'bull',...d})),
+    ...dedupeOverlap(dedupeByI1(bearDivs)).map(d=>({type:'bear',...d}))
+  ];
+  S.hdivs=[
+    ...dedupeOverlap(dedupeByI1(hbullDivs)).map(d=>({type:'hbull',...d})),
+    ...dedupeOverlap(dedupeByI1(hbearDivs)).map(d=>({type:'hbear',...d}))
+  ];
+
+  S.divs.sort((a,b)=>a.i2-b.i2);
+  S.hdivs.sort((a,b)=>a.i2-b.i2);
+
   checkDivAlerts(silent);
 }
 
@@ -817,55 +909,50 @@ function checkDivAlerts(silent=false){
   if(!S.lastDivKey[S.tf]) S.lastDivKey[S.tf]={};
   const tfKeys = S.lastDivKey[S.tf];
   const n = S.candles.length;
-  const RECENT = 3; // 최근 N캔들 이내에서 완성된 신호만 알림
 
-  // 정규 + 히든 합쳐서 처리
   [...S.divs,...S.hdivs].forEach(d=>{
-    const isH = d.type.startsWith('h');
-    const isBull = d.type.includes('bull');
-    const dir = isBull ? 'bull' : 'bear';
+    const isH   = d.type.startsWith('h');
+    const isBull= d.type.includes('bull');
+    const dir   = isBull?'bull':'bear';
 
-    // 최신 신호만 알림 — i2가 현재 캔들에서 RECENT 이내
-    const isRecent = (n - 1 - d.i2) <= RECENT;
-    if(!isRecent){
-      // 오래된 신호는 등록만 (알림 없이)
-      const key = `${d.type}_${d.i1}_${d.i2}`;
-      tfKeys[key] = true;
-      return;
+    if(!isH && !S.cfg.rdiv) return;
+    if(isH  && !S.cfg.hdiv) return;
+
+    const prefix = isH?'H-Div':'Div';
+    const arrow  = isBull?'↑':'↓';
+    const emoji  = isBull?'🔼':'🔽';
+    const sub    = `RSI ${d.r1.toFixed(1)}→${d.r2.toFixed(1)} | ${fp(d.p1)}→${fp(d.p2)}`;
+    const cls    = isBull?'t-bull':'t-bear';
+
+    // ── ① 형성 알림 (저점 찍히는 순간, 실시간) ──
+    const formKey = `form_${d.type}_${d.i1}_${d.i2}`;
+    const isRecentForm = (n-1-d.i2) <= 2; // 최근 2캔들 이내 형성
+    if(!tfKeys[formKey] && isRecentForm){
+      tfKeys[formKey] = true;
+      if(!silent){
+        const title = `[${S.tf}] ${prefix}${arrow} 형성!`;
+        showToast(emoji, title, sub, cls);
+        sendNotif(title, sub);
+        playSound(isBull?'bull':'bear');
+        addLog(`${emoji} ${title} | ${sub}`, cls);
+      }
+    } else if(!tfKeys[formKey]){
+      // 오래된 신호는 조용히 등록
+      tfKeys[formKey] = true;
     }
 
-    // 같은 방향의 기존 신호보다 더 큰지 확인 (업그레이드 감지)
-    const existingKey = tfKeys[`active_${dir}`];
-    const key = `${d.type}_${d.i1}_${d.i2}`;
-
-    if(tfKeys[key]) return; // 이미 알림 보낸 신호
-    tfKeys[key] = true;
-    if(silent) return;
-
-    // 업그레이드 여부: 기존 신호보다 i1이 더 이전이면 더 큰 다이버전스
-    const isUpgrade = existingKey && existingKey !== key &&
-      (() => {
-        const [,prevI1] = existingKey.split('_').map(Number);
-        return d.i1 < prevI1;
-      })();
-    tfKeys[`active_${dir}`] = key;
-
-    // 알림 설정 확인
-    if(!isH && !S.cfg.rdiv) return;
-    if(isH && !S.cfg.hdiv) return;
-
-    const prefix = isH ? 'H-Div' : 'Div';
-    const arrow  = isBull ? '↑' : '↓';
-    const emoji  = isBull ? '🔼' : '🔽';
-    const upgradeTag = isUpgrade ? ' 📈 신호 강화!' : '';
-    const title = `[${S.tf}] ${prefix}${arrow}${upgradeTag}`;
-    const sub   = `RSI ${d.r1.toFixed(1)}→${d.r2.toFixed(1)} | ${fp(d.p1)}→${fp(d.p2)}`;
-    const cls   = isH ? (isBull?'t-bull':'t-bear') : (isBull?'t-bull':'t-bear');
-
-    showToast(emoji, title, sub, cls);
-    sendNotif(title, sub);
-    playSound(isBull?'bull':'bear');
-    addLog(`${emoji} ${title} | ${sub}`, cls);
+    // ── ② 수렴 확인 알림 (CONFIRM캔들 후 종가 마감 기준) ──
+    const convKey = `conv_${d.type}_${d.i1}_${d.i2}`;
+    if(!tfKeys[convKey] && d.converged && tfKeys[formKey]){
+      tfKeys[convKey] = true;
+      if(!silent){
+        const title = `[${S.tf}] ${prefix}${arrow} 수렴 확인! ✨`;
+        showToast(emoji, title, sub, cls);
+        sendNotif(title, sub);
+        playSound(isBull?'bull':'bear');
+        addLog(`${emoji} ${title} | ${sub}`, cls);
+      }
+    }
   });
 }
 
@@ -1145,7 +1232,7 @@ function drawCandles(si,ei,cw,mn,mx){
 function drawDivs(si,ei,cw,mn,mx){
   const drawSet=(arr,isH)=>{
     arr.forEach(d=>{
-      if(d.i2<si||d.i1>ei) return;
+      if(d.i2<si-10||d.i1>ei+10) return; // 한쪽이 화면 밖이어도 표시
       const isBull=d.type.includes('bull');
       // 정규: 실선, 초록/빨강 / 히든: 점선, 하늘색/보라
       const col = isH
@@ -1212,7 +1299,7 @@ function drawRSI(si,ei,cw){
   // Divergence lines on RSI panel
   const drawRsiSet=(arr,isH)=>{
     arr.forEach(d=>{
-      if(d.i2<si||d.i1>ei||!rsi[d.i1]||!rsi[d.i2]) return;
+      if(d.i2<si-10||d.i1>ei+10||!rsi[d.i1]||!rsi[d.i2]) return;
       const isBull=d.type.includes('bull');
       const col = isH
         ? (isBull?'rgba(0,212,255,.7)':'rgba(179,136,255,.7)')
@@ -2162,14 +2249,14 @@ cv.addEventListener('mousemove',e=>{
   if(S.drag && S.dragAxis==='x'){
     const{cw}=visR();
     // 지도 당기기: 매 프레임 delta 기반 (찍은 지점 따라오기)
-    const deltaCandles = -(e.clientX - S.dragX) / cw;
+    const deltaCandles = (e.clientX - S.dragX) / cw;
     S.viewOff = Math.max(0, Math.min(S.candles.length-10, S.dragOff + Math.round(deltaCandles)));
     hideCrosshair(); draw(); return;
   }
   // Y축 드래그 (1:1 픽셀→가격 매핑)
   if(S.drag && S.dragAxis==='y'){
     const ppp = S._yDragPricePerPx || 1;
-    S.yOffset = S.yDragOffset + (e.clientY-S.yDragY)*ppp;
+    S.yOffset = S.yDragOffset - (e.clientY-S.yDragY)*ppp;
     hideCrosshair(); draw(); return;
   }
   // 작도 중 자석 미리보기
@@ -2339,12 +2426,12 @@ cv.addEventListener('touchmove',e=>{
     if(S.dragAxis==='x'){
       const{cw}=visR();
       // 지도 당기기: 매 프레임 delta 기반
-      const deltaCandles = -(tx - S.dragX) / cw;
+      const deltaCandles = (tx - S.dragX) / cw;
       S.viewOff = Math.max(0, Math.min(S.candles.length-10, S.dragOff + Math.round(deltaCandles)));
     } else {
       // 1:1 픽셀→가격 매핑 (지도 당기기)
       const ppp = S._yDragPricePerPx || (S.frozenScale?(S.frozenScale.mx-S.frozenScale.mn)/mainH():1);
-      S.yOffset = S.yDragOffset + (ty-S.yDragY)*ppp;
+      S.yOffset = S.yDragOffset - (ty-S.yDragY)*ppp;
     }
     draw();
   } else if(e.touches.length===2){
@@ -2495,6 +2582,8 @@ function syncSettingsUI(){
   document.getElementById('ob-v').textContent     = S.cfg.rsiOB;
   document.getElementById('os-v').textContent     = S.cfg.rsiOS;
   document.getElementById('pg-v').textContent     = S.cfg.pivotGap;
+  document.getElementById('dc-v').textContent     = (S.cfg.divConfirm||3);
+  document.getElementById('dmg-v').textContent    = (S.cfg.divMaxGap||80);
   document.getElementById('vpp-v').textContent    = S.cfg.vpProx+'%';
 }
 
