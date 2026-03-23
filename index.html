@@ -342,18 +342,20 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
 // ═══════════════════════════════════════════════════════
 const CH_COLORS  = ['#00d4ff','#ff6b35','#b388ff','#00e676','#ffd600'];
 const CH_NAMES   = ['CH1','CH2','CH3','CH4','CH5'];
+// 추세선/수평선 전용 색상 (채널과 구분)
+const LINE_COLORS = ['#ff4081','#00e5ff','#76ff03','#ff6d00','#ea80fc','#18ffff','#ccff90','#ff9e80'];
 const VP_BINS    = 42;
-const VP_W_MAX   = 65;  // px, max VP bar width
+const VP_W_MAX   = 65;
 const LVS        = [-1,-0.5,0,0.5,1,1.5,2];
 
-const LV_BASE_COLORS = {
-  '-1':'#b388ff','-0.5':'rgba(179,136,255,.6)',
-  '0':'#FFFFFF',  // will be overridden per channel
-  '0.5':'rgba(255,255,255,.5)',
-  '1':'#FFFFFF',
-  '1.5':'rgba(255,107,53,.6)','2':'#ff6b35'
-};
-const LV_W = {'-1':1.5,'-0.5':1,'0':2,'0.5':1,'1':2,'1.5':1,'2':1.5};
+// 채널별 레벨 색상 계산 (같은 채널 = 같은 색상 계열)
+function chLvColor(chColor, lv, alpha){
+  const r=parseInt(chColor.slice(1,3),16);
+  const g=parseInt(chColor.slice(3,5),16);
+  const b=parseInt(chColor.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+const LVS = [-1,-0.5,0,0.5,1,1.5,2];
 
 // ═══════════════════════════════════════════════════════
 //  STATE
@@ -1024,12 +1026,23 @@ function mixAlpha(hexCol, alpha){
 
 function drawChannel(ch,si,ei,cw,mn,mx){
   const ext=25;
-  const col=ch.color;
+  const col=ch.color; // 채널 기본 색상
   const x0=X(si-ext,si,cw), x1=X(ei+ext,si,cw);
 
-  // Band fills (subtle)
-  [{a:0,b:1,a2:.03},{a:-0.5,b:0,a2:.025},{a:1,b:1.5,a2:.025},{a:-1,b:-0.5,a2:.04},{a:1.5,b:2,a2:.04}].forEach(({a,b,a2})=>{
-    ctx.fillStyle=mixAlpha(col.length===7?col:'#00d4ff',a2);
+  // 레벨별 색상/굵기/투명도 정의 (모두 같은 채널 색상 계열)
+  const lvDef = {
+    '-1': { alpha:0.7, lw:1.5, dash:[5,4] },
+    '-0.5':{ alpha:0.45,lw:1,   dash:[3,3] },
+    '0':  { alpha:1.0, lw:2,   dash:[] },
+    '0.5':{ alpha:0.45,lw:1,   dash:[3,3] },
+    '1':  { alpha:1.0, lw:2,   dash:[] },
+    '1.5':{ alpha:0.45,lw:1,   dash:[3,3] },
+    '2':  { alpha:0.7, lw:1.5, dash:[5,4] },
+  };
+
+  // Band fills
+  [{a:0,b:1,fa:.04},{a:-0.5,b:0,fa:.025},{a:1,b:1.5,fa:.025},{a:-1,b:-0.5,fa:.04},{a:1.5,b:2,fa:.04}].forEach(({a,b,fa})=>{
+    ctx.fillStyle=chLvColor(col,a,fa);
     ctx.beginPath();
     ctx.moveTo(x0,Y(chAt(ch,si-ext,a),mn,mx));
     ctx.lineTo(x1,Y(chAt(ch,ei+ext,a),mn,mx));
@@ -1038,34 +1051,31 @@ function drawChannel(ch,si,ei,cw,mn,mx){
     ctx.closePath(); ctx.fill();
   });
 
-  // Lines
+  // Lines — 모두 채널 색상 계열
   LVS.forEach(lv=>{
     const k=String(lv);
-    const isMain=(lv===0||lv===1);
-    const isDashed=(lv%1!==0);
-    const lineCol= isMain ? col : (lv<0?'#b388ff':(lv>1?'#ff6b35':mixAlpha(col,0.55)));
-    const lw=LV_W[k];
-    ctx.strokeStyle=lineCol; ctx.lineWidth=lw;
-    ctx.setLineDash(isDashed?[4,3]:[]);
+    const def=lvDef[k]||{alpha:0.6,lw:1,dash:[]};
+    const lineCol=chLvColor(col,lv,def.alpha);
+    ctx.strokeStyle=lineCol; ctx.lineWidth=def.lw;
+    ctx.setLineDash(def.dash);
     ctx.beginPath();
     ctx.moveTo(x0,Y(chAt(ch,si-ext,lv),mn,mx));
     ctx.lineTo(x1,Y(chAt(ch,ei+ext,lv),mn,mx));
     ctx.stroke();
     ctx.setLineDash([]);
-    // Right label
+    // 우측 라벨
     const yl=Y(chAt(ch,ei+ext,lv),mn,mx);
-    const lbl=lv===0?'0▼':lv===1?'1▲':k;
-    ctx.fillStyle=lineCol; ctx.font='600 11px Courier New,monospace'; ctx.textAlign='left';
-    // Show channel name on level 0
+    const lbl=lv===0?'0':lv===1?'1':k;
+    ctx.fillStyle=lineCol; ctx.font='600 10px Courier New,monospace'; ctx.textAlign='left';
     if(lv===0||lv===1){
       ctx.fillText(`${ch.name} ${lbl}`,W-P.r+2,yl+3);
     } else {
       ctx.fillText(lbl,W-P.r+2,yl+3);
     }
-    // Touch count badge
+    // 터치 횟수 배지
     const tc=ch.touchCounts[k]||0;
-    if(tc>=4){ctx.fillStyle='#ff6b35';ctx.font='bold 11px Courier New,monospace';ctx.fillText(`⚡${tc}x`,W-P.r+24,yl+3);}
-    else if(tc>0){ctx.fillStyle='#6b7a90';ctx.font='11px Courier New,monospace';ctx.fillText(`${tc}x`,W-P.r+24,yl+3);}
+    if(tc>=4){ ctx.fillStyle='#ff6b35'; ctx.font='bold 10px Courier New,monospace'; ctx.fillText(`⚡${tc}x`,W-P.r+26,yl+3); }
+    else if(tc>0){ ctx.fillStyle='rgba(107,122,144,.8)'; ctx.font='10px Courier New,monospace'; ctx.fillText(`${tc}x`,W-P.r+26,yl+3); }
   });
 
   // ── P1 / P2 / P3 편집 핸들 도트 ──
@@ -1615,33 +1625,49 @@ function linePrice(line, idx){
 // ── 선 렌더링 ──────────────────────────────────────────
 function drawLines(si,ei,cw,mn,mx){
   getLines().filter(l=>l.visible).forEach(line=>{
-    const col=line.color||'#ffd600';
+    const col=line.color||'#ff4081';
     ctx.save();
-    ctx.strokeStyle=col; ctx.lineWidth=1.5;
-    ctx.setLineDash(line.type==='hline'?[5,4]:[]);
 
     if(line.type==='hline'){
+      // 수평선: 긴 점선
       const y=Y(line.p1.price,mn,mx);
+      ctx.strokeStyle=col; ctx.lineWidth=1.5;
+      ctx.setLineDash([8,5]);
       ctx.beginPath(); ctx.moveTo(P.l,y); ctx.lineTo(W-P.r,y); ctx.stroke();
       ctx.setLineDash([]);
       // 가격 라벨
       ctx.fillStyle=col; ctx.font='bold 10px Courier New,monospace'; ctx.textAlign='right';
-      ctx.fillText(fp(line.p1.price), W-P.r-2, y-3);
+      ctx.fillText(fp(line.p1.price), W-P.r-3, y-3);
       // 드래그 핸들
       _drawLinePtDot(X(ptIdx(line.p1),si,cw), y, col, line.id, 'p1');
     } else {
-      // 추세선 양방향 연장
+      // 추세선: 실선 + 양방향 화살표
       const i1=ptIdx(line.p1), i2=ptIdx(line.p2);
-      const slope=i1===i2?0:(line.p2.price-line.p1.price)/(i2-i1);
-      // 화면 왼쪽~오른쪽까지 연장
-      const extL=si-50, extR=ei+50;
+      if(i1===i2){ ctx.restore(); return; }
+      const slope=(line.p2.price-line.p1.price)/(i2-i1);
+      const extL=si-80, extR=ei+80;
       const pL=line.p1.price+slope*(extL-i1);
       const pR=line.p1.price+slope*(extR-i1);
-      ctx.beginPath();
-      ctx.moveTo(X(extL,si,cw),Y(pL,mn,mx));
-      ctx.lineTo(X(extR,si,cw),Y(pR,mn,mx));
-      ctx.stroke();
-      ctx.setLineDash([]);
+      const xL=X(extL,si,cw), xR=X(extR,si,cw);
+      const yL=Y(pL,mn,mx), yR=Y(pR,mn,mx);
+
+      ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(xL,yL); ctx.lineTo(xR,yR); ctx.stroke();
+
+      // 화살표 (양쪽)
+      const drawArrow=(x,y,angle)=>{
+        const len=8, spread=0.4;
+        ctx.fillStyle=col;
+        ctx.beginPath();
+        ctx.moveTo(x,y);
+        ctx.lineTo(x-len*Math.cos(angle-spread), y-len*Math.sin(angle-spread));
+        ctx.lineTo(x-len*Math.cos(angle+spread), y-len*Math.sin(angle+spread));
+        ctx.closePath(); ctx.fill();
+      };
+      const ang=Math.atan2(yR-yL,xR-xL);
+      drawArrow(xR,yR,ang);           // 오른쪽 화살표
+      drawArrow(xL,yL,ang+Math.PI);   // 왼쪽 화살표
+
       // 드래그 핸들
       _drawLinePtDot(X(i1,si,cw),Y(line.p1.price,mn,mx),col,line.id,'p1');
       _drawLinePtDot(X(i2,si,cw),Y(line.p2.price,mn,mx),col,line.id,'p2');
