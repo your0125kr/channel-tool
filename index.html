@@ -92,6 +92,34 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
 .tb2 .ts{font-size:10px;color:var(--text2)}
 .tx{margin-left:auto;cursor:pointer;color:var(--text2);font-size:15px;flex-shrink:0}
 
+/* ── OHLCR BAR ── */
+#ohlcbar{
+  display:flex;align-items:center;gap:0;padding:3px 10px;
+  background:var(--panel);border-bottom:1px solid var(--border);
+  flex-shrink:0;flex-wrap:nowrap;overflow-x:auto;
+  font-family:'JetBrains Mono',monospace;font-size:11px;
+  scrollbar-width:none;
+}
+#ohlcbar::-webkit-scrollbar{display:none}
+.ohlc-time{color:var(--text2);font-size:10px;margin-right:10px;white-space:nowrap}
+.ohlc-item{display:flex;align-items:center;gap:3px;margin-right:10px;white-space:nowrap}
+.ohlc-lbl{color:var(--text2);font-size:10px}
+.ohlc-val{font-size:11px;font-weight:600}
+.ohlc-sep{color:var(--border);margin-right:10px}
+
+/* ── CANDLE TOOLTIP ── */
+#ch-tooltip{
+  position:fixed;pointer-events:none;z-index:150;
+  background:rgba(10,12,16,.96);border:1px solid var(--border);
+  border-radius:8px;padding:8px 11px;font-family:'JetBrains Mono',monospace;
+  font-size:11px;line-height:1.85;backdrop-filter:blur(8px);
+  display:none;white-space:nowrap;box-shadow:0 4px 20px rgba(0,0,0,.5);
+}
+.ctt-row{display:flex;gap:6px;align-items:center}
+.ctt-lbl{color:var(--text2);width:22px;font-size:10px}
+.ctt-val{color:var(--text);font-weight:600}
+.ctt-time{color:var(--accent);font-size:10px;margin-bottom:4px;border-bottom:1px solid var(--border);padding-bottom:4px}
+
 /* ── LOG ── */
 #logpanel{position:fixed;bottom:0;left:0;right:0;max-height:190px;background:var(--panel);border-top:1px solid var(--border);transform:translateY(100%);transition:transform .3s ease;z-index:100;overflow-y:auto}
 #logpanel.open{transform:translateY(0)}
@@ -190,6 +218,19 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
   <div id="dstatus"></div>
 </div>
 
+<!-- OHLCR BAR -->
+<div id="ohlcbar">
+  <span class="ohlc-time" id="ohlc-time">--</span>
+  <div class="ohlc-item"><span class="ohlc-lbl">O</span><span class="ohlc-val" id="ohlc-o" style="color:var(--text)">--</span></div>
+  <div class="ohlc-item"><span class="ohlc-lbl">H</span><span class="ohlc-val" id="ohlc-h" style="color:var(--green)">--</span></div>
+  <div class="ohlc-item"><span class="ohlc-lbl">L</span><span class="ohlc-val" id="ohlc-l" style="color:var(--red)">--</span></div>
+  <div class="ohlc-item"><span class="ohlc-lbl">C</span><span class="ohlc-val" id="ohlc-c" style="color:var(--text)">--</span></div>
+  <span class="ohlc-sep">│</span>
+  <div class="ohlc-item"><span class="ohlc-lbl">RSI</span><span class="ohlc-val" id="ohlc-rsi" style="color:var(--yellow)">--</span></div>
+  <span class="ohlc-sep">│</span>
+  <div class="ohlc-item"><span class="ohlc-lbl">Vol</span><span class="ohlc-val" id="ohlc-vol" style="color:var(--purple)">--</span></div>
+</div>
+
 <!-- CHART -->
 <div id="cwrap">
   <canvas id="cv"></canvas>
@@ -224,6 +265,9 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
 
 <!-- TOASTS -->
 <div id="toasts"></div>
+
+<!-- CANDLE TOOLTIP -->
+<div id="ch-tooltip"></div>
 
 <!-- LOG -->
 <div id="logpanel">
@@ -266,12 +310,12 @@ input[type=range]{width:90px;accent-color:var(--accent);flex-shrink:0}
     <div class="srow"><label>RSI 패널 표시</label><button class="tog on" id="tg-rsi" onclick="togS(this,'rsi');draw()"></button></div>
     <div class="srow">
       <label>RSI 과매수 기준 (OB)</label>
-      <input type="range" min="65" max="80" step="1" value="70" oninput="updCfg('rsiOB',parseInt(this.value),this,'ob-v','')">
+      <input type="range" min="65" max="80" step="1" value="70" oninput="updCfg('rsiOB',parseInt(this.value),this,'ob-v','');findDivs();draw()">
       <span class="sval" id="ob-v">70</span>
     </div>
     <div class="srow">
       <label>RSI 과매도 기준 (OS)</label>
-      <input type="range" min="20" max="35" step="1" value="30" oninput="updCfg('rsiOS',parseInt(this.value),this,'os-v','')">
+      <input type="range" min="20" max="35" step="1" value="30" oninput="updCfg('rsiOS',parseInt(this.value),this,'os-v','');findDivs();draw()">
       <span class="sval" id="os-v">30</span>
     </div>
     <div class="srow">
@@ -485,7 +529,7 @@ function loadCandleCache(){
     if(!cached||!cached.length) return false;
     S.candles = cached;
     S.viewOff = 0;
-    calcRSI(); calcVP(); findDivs(true); draw();
+    calcRSI(); calcVP(); findDivs(true); draw(); resetOHLCBar();
     return true;
   }catch(e){ return false; }
 }
@@ -513,7 +557,7 @@ async function fetchCandles(){
     S.candles = list.slice().reverse().map(parseBybitCandle);
     S.viewOff = 0;
     saveCandleCache(); // 최신 500개 캐시 저장
-    calcRSI(); calcVP(); findDivs(true); draw();
+    calcRSI(); calcVP(); findDivs(true); draw(); resetOHLCBar();
   }catch(e){
     console.error('fetchCandles 실패:', e);
     if(!hasCached){
@@ -570,7 +614,7 @@ function connectWS(){
         checkAllChAlerts(c.c, confirmed);
         checkAllLineAlerts(c.c, confirmed);
         checkVPAlerts(c.c);
-        draw();
+        draw(); if(!CH_STATE.active) resetOHLCBar();
       }catch(e){ console.error('polling error',e); }
     }, 5000);
     return;
@@ -601,7 +645,7 @@ function connectWS(){
         checkAllChAlerts(c.c, confirmed);
         checkAllLineAlerts(c.c, confirmed);
         checkVPAlerts(c.c);
-        draw();
+        draw(); if(!CH_STATE.active) resetOHLCBar();
       }
     }catch(e){ console.error('WS parse error',e); }
   };
@@ -736,31 +780,21 @@ function calcVP(){
 //  DIVERGENCE
 // ═══════════════════════════════════════════════════════
 
-// 피벗 감지: 저점/고점 후 반전 확인 방식 (급격한 스파이크도 감지)
+// 피벗 감지: gap 범위 내 최고/최저점 기준으로 판별 (완만한 고점/저점도 감지)
 function getPivots(arr, gap){
   const H=[], L=[], n=arr.length;
-  for(let i=1; i<n-1; i++){
+  for(let i=gap; i<n-gap; i++){
     if(arr[i]==null) continue;
-    const prev=arr[i-1];
-    if(prev==null) continue;
-    // 저점 후보: 이전보다 낮고 이후 최소 1개 상승
-    if(arr[i] < prev){
-      let rising=0;
-      for(let j=i+1; j<Math.min(n,i+gap+1); j++){
-        if(arr[j]==null) break;
-        if(arr[j]>arr[i]) rising++; else break;
-      }
-      if(rising>=1) L.push(i);
+    let isHigh=true, isLow=true;
+    // i 기준 앞뒤 gap 캔들 내에서 최고/최저인지 확인
+    for(let j=i-gap; j<=i+gap; j++){
+      if(j===i) continue;
+      if(arr[j]==null) continue;
+      if(arr[j]>=arr[i]) isHigh=false;
+      if(arr[j]<=arr[i]) isLow=false;
     }
-    // 고점 후보: 이전보다 높고 이후 최소 1개 하락
-    if(arr[i] > prev){
-      let falling=0;
-      for(let j=i+1; j<Math.min(n,i+gap+1); j++){
-        if(arr[j]==null) break;
-        if(arr[j]<arr[i]) falling++; else break;
-      }
-      if(falling>=1) H.push(i);
-    }
+    if(isHigh) H.push(i);
+    if(isLow)  L.push(i);
   }
   // 중복 제거: 너무 가까운 피벗은 더 극단적인 것만 유지
   function dedup(arr2, isLow){
@@ -2208,6 +2242,77 @@ function _drawCrosshairLines(si, cw, mn, mx){
   ctx.setLineDash([]); ctx.restore();
 }
 
+// ── OHLCR 바 + 말풍선 업데이트 ──────────────────────────
+function fmtVol(v){
+  if(v>=1e9) return (v/1e9).toFixed(2)+'B';
+  if(v>=1e6) return (v/1e6).toFixed(2)+'M';
+  if(v>=1e3) return (v/1e3).toFixed(1)+'K';
+  return v.toFixed(0);
+}
+function fmtTime(ts){
+  const d=new Date(ts);
+  const pad=n=>n.toString().padStart(2,'0');
+  return `${d.getMonth()+1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function updateOHLCBar(idx){
+  if(idx==null||!S.candles[idx]) return;
+  const c=S.candles[idx];
+  const rsiVal=S.rsi&&S.rsi[idx]!=null?S.rsi[idx].toFixed(1):'--';
+  const rsiEl=document.getElementById('ohlc-rsi');
+  document.getElementById('ohlc-time').textContent=fmtTime(c.t);
+  document.getElementById('ohlc-o').textContent=fp(c.o);
+  document.getElementById('ohlc-h').textContent=fp(c.h);
+  document.getElementById('ohlc-l').textContent=fp(c.l);
+  document.getElementById('ohlc-c').textContent=fp(c.c);
+  document.getElementById('ohlc-vol').textContent=fmtVol(c.v);
+  if(rsiEl){
+    rsiEl.textContent=rsiVal;
+    const rv=parseFloat(rsiVal);
+    rsiEl.style.color=isNaN(rv)?'var(--yellow)':rv>=S.cfg.rsiOB?'var(--red)':rv<=S.cfg.rsiOS?'var(--green)':'var(--yellow)';
+  }
+  // 종가 색상 (상승/하락)
+  const cEl=document.getElementById('ohlc-c');
+  if(cEl) cEl.style.color=c.c>=c.o?'var(--green)':'var(--red)';
+}
+function resetOHLCBar(){
+  // 크로스헤어 사라지면 최신 캔들로 복원
+  if(S.candles&&S.candles.length) updateOHLCBar(S.candles.length-1);
+}
+function showCandleTooltip(screenX, screenY, idx){
+  if(idx==null||!S.candles[idx]) return;
+  const tt=document.getElementById('ch-tooltip');
+  if(!tt) return;
+  const c=S.candles[idx];
+  const rsiVal=S.rsi&&S.rsi[idx]!=null?S.rsi[idx].toFixed(1):'--';
+  const rv=parseFloat(rsiVal);
+  const rsiColor=isNaN(rv)?'var(--yellow)':rv>=S.cfg.rsiOB?'var(--red)':rv<=S.cfg.rsiOS?'var(--green)':'var(--yellow)';
+  const cColor=c.c>=c.o?'var(--green)':'var(--red)';
+  const chg=((c.c-c.o)/c.o*100).toFixed(2);
+  const chgSign=c.c>=c.o?'+':'';
+  tt.innerHTML=`
+    <div class="ctt-time">${fmtTime(c.t)} <span style="color:${cColor};margin-left:6px">${chgSign}${chg}%</span></div>
+    <div class="ctt-row"><span class="ctt-lbl">O</span><span class="ctt-val">${fp(c.o)}</span></div>
+    <div class="ctt-row"><span class="ctt-lbl">H</span><span class="ctt-val" style="color:var(--green)">${fp(c.h)}</span></div>
+    <div class="ctt-row"><span class="ctt-lbl">L</span><span class="ctt-val" style="color:var(--red)">${fp(c.l)}</span></div>
+    <div class="ctt-row"><span class="ctt-lbl">C</span><span class="ctt-val" style="color:${cColor}">${fp(c.c)}</span></div>
+    <div class="ctt-row" style="margin-top:4px;padding-top:4px;border-top:1px solid var(--border)"><span class="ctt-lbl">RSI</span><span class="ctt-val" style="color:${rsiColor}">${rsiVal}</span></div>
+    <div class="ctt-row"><span class="ctt-lbl">Vol</span><span class="ctt-val" style="color:var(--purple)">${fmtVol(c.v)}</span></div>
+  `;
+  tt.style.display='block';
+  // 스마트 위치: 화면 끝 넘지 않게
+  const tw=tt.offsetWidth||160, th=tt.offsetHeight||160;
+  const vw=window.innerWidth, vh=window.innerHeight;
+  let lx=screenX+18, ly=screenY-th/2;
+  if(lx+tw>vw-10) lx=screenX-tw-18;
+  if(ly<10) ly=10;
+  if(ly+th>vh-10) ly=vh-th-10;
+  tt.style.left=lx+'px'; tt.style.top=ly+'px';
+}
+function hideCandleTooltip(){
+  const tt=document.getElementById('ch-tooltip');
+  if(tt) tt.style.display='none';
+}
+
 // DOM 라벨 업데이트 — mousemove/touchmove 에서 직접 호출
 function _updateCrosshairDOM(cx, cy){
   const{si,ei,cw}=visR();
@@ -2217,6 +2322,11 @@ function _updateCrosshairDOM(cx, cy){
   const priceEl=document.getElementById('crosshair-price');
   const timeEl =document.getElementById('crosshair-time');
   const rsiEl  =document.getElementById('crosshair-rsi');
+
+  // 캔들 인덱스 계산 (가격/RSI 영역 모두에서 사용)
+  const rawIdx=FX(clampX,si,cw);
+  const idx=Math.max(0,Math.min(S.candles.length-1,Math.round(rawIdx)));
+
   if(S.cfg.rsi&&cy>=rsiTop()){
     const rsiVal=((1-(cy-rsiTop())/RSI_H)*100).toFixed(1);
     priceEl.style.display='none'; rsiEl.style.display='block';
@@ -2226,8 +2336,6 @@ function _updateCrosshairDOM(cx, cy){
     const price=FY(clampY,mn,mx);
     priceEl.style.display='block'; priceEl.style.top=(clampY-10)+'px';
     priceEl.textContent=fp(price); rsiEl.style.display='none';
-    const rawIdx=FX(clampX,si,cw);
-    const idx=Math.max(0,Math.min(S.candles.length-1,Math.round(rawIdx)));
     const candle=S.candles[idx];
     if(candle){
       const d=new Date(candle.t);
@@ -2239,6 +2347,15 @@ function _updateCrosshairDOM(cx, cy){
       timeEl.textContent=`${d.getMonth()+1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
   }
+
+  // OHLCR 바 업데이트
+  updateOHLCBar(idx);
+
+  // 말풍선 툴팁 (PC 전용 — 터치 환경에선 숨김)
+  if(!('ontouchstart' in window)){
+    const r=document.getElementById('cv').getBoundingClientRect();
+    showCandleTooltip(r.left+cx, r.top+cy, idx);
+  }
 }
 
 function hideCrosshair(){
@@ -2246,6 +2363,8 @@ function hideCrosshair(){
   ['crosshair-price','crosshair-rsi','crosshair-time'].forEach(id=>{
     document.getElementById(id).style.display='none';
   });
+  hideCandleTooltip();
+  resetOHLCBar();
   draw();
 }
 
@@ -2410,7 +2529,7 @@ cv.addEventListener('touchstart',e=>{
       if(!S.drag && !S.edit.dragging){
         CH_STATE.active=true;
         CH_STATE.x=t.clientX-r.left; CH_STATE.y=t.clientY-r.top;
-        draw();
+        draw(); _updateCrosshairDOM(CH_STATE.x, CH_STATE.y);
       }
     },500);
     S.dragX=t.clientX; S.dragY=t.clientY; S.dragOff=S.viewOff;
