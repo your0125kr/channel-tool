@@ -780,23 +780,23 @@ function calcVP(){
 //  DIVERGENCE
 // ═══════════════════════════════════════════════════════
 
-// 피벗 감지: gap 범위 내 최고/최저점 기준으로 판별 (완만한 고점/저점도 감지)
+// 피벗 감지: 앞뒤 lookback 캔들 대비 로컬 최고/최저점
 function getPivots(arr, gap){
   const H=[], L=[], n=arr.length;
-  for(let i=gap; i<n-gap; i++){
+  const lb = Math.max(2, Math.floor(gap/2)); // lookback/lookahead (gap의 절반, 최소 2)
+  for(let i=lb; i<n-lb; i++){
     if(arr[i]==null) continue;
-    let isHigh=true, isLow=true;
-    // i 기준 앞뒤 gap 캔들 내에서 최고/최저인지 확인
-    for(let j=i-gap; j<=i+gap; j++){
+    let isH=true, isL=true;
+    for(let j=i-lb; j<=i+lb; j++){
       if(j===i) continue;
       if(arr[j]==null) continue;
-      if(arr[j]>=arr[i]) isHigh=false;
-      if(arr[j]<=arr[i]) isLow=false;
+      if(arr[j]>=arr[i]) isH=false;
+      if(arr[j]<=arr[i]) isL=false;
     }
-    if(isHigh) H.push(i);
-    if(isLow)  L.push(i);
+    if(isH) H.push(i);
+    if(isL) L.push(i);
   }
-  // 중복 제거: 너무 가까운 피벗은 더 극단적인 것만 유지
+  // 중복 제거: gap 이내 피벗은 더 극단적인 것만 유지
   function dedup(arr2, isLow){
     const result=[];
     for(let k=0;k<arr2.length;k++){
@@ -1337,6 +1337,26 @@ function drawRSI(si,ei,cw){
     first?ctx.moveTo(x,y):ctx.lineTo(x,y); first=false;
   }
   ctx.stroke();
+  // RSI 피벗 마커 (작은 삼각형) — 디버그 겸 UX
+  if(S.cfg.rdiv||S.cfg.hdiv){
+    const{H,L}=getPivots(S.rsi, S.cfg.pivotGap);
+    ctx.save();
+    // 고점 피벗: 아래 삼각형 (RSI 선 위에)
+    ctx.fillStyle='rgba(255,61,87,.5)';
+    H.forEach(i=>{
+      if(i<si||i>ei||S.rsi[i]==null) return;
+      const x=X(i,si,cw), y=RY(S.rsi[i])-6;
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x-3,y-5); ctx.lineTo(x+3,y-5); ctx.closePath(); ctx.fill();
+    });
+    // 저점 피벗: 위 삼각형 (RSI 선 아래)
+    ctx.fillStyle='rgba(0,230,118,.5)';
+    L.forEach(i=>{
+      if(i<si||i>ei||S.rsi[i]==null) return;
+      const x=X(i,si,cw), y=RY(S.rsi[i])+6;
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x-3,y+5); ctx.lineTo(x+3,y+5); ctx.closePath(); ctx.fill();
+    });
+    ctx.restore();
+  }
   // Divergence lines on RSI panel
   const drawRsiSet=(arr,isH)=>{
     arr.forEach(d=>{
